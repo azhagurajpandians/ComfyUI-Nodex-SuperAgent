@@ -17,7 +17,7 @@ No extra Python packages needed. Uses `aiohttp`, which ships with ComfyUI.
 **Option A (Git Clone - Recommended):**
 ```bash
 cd ComfyUI_windows_portable/ComfyUI/custom_nodes
-git clone https://github.com/dreamsin3d/ComfyUI-Nodex-SuperAgent.git
+git clone https://github.com/azhagurajpandians/ComfyUI-Nodex-SuperAgent.git
 ```
 
 **Option B (Manual):**
