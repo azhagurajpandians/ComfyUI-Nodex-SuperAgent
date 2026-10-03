@@ -27,6 +27,8 @@ class TestRoutes(unittest.TestCase):
         self.assertTrue(hasattr(routes, "agent_unload"))
         self.assertTrue(hasattr(routes, "agent_get_config"))
         self.assertTrue(hasattr(routes, "agent_save_config"))
+        self.assertTrue(hasattr(routes, "agent_list_workflows"))
+        self.assertTrue(hasattr(routes, "agent_get_workflow"))
 
 
 if __name__ == "__main__":

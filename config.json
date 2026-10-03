@@ -1,9 +1,9 @@
 {
-  "provider": "ollama",
+  "provider": "nvidia",
   "ollama_host": "http://127.0.0.1:11434",
-  "base_url": "http://127.0.0.1:11434",
+  "base_url": "https://integrate.api.nvidia.com/v1",
   "api_key": "",
-  "default_model": "llama3.1:8b",
+  "default_model": "meta/llama-3.3-70b-instruct",
   "keep_alive": "5m",
   "num_ctx": 8192,
   "temperature": 0.4,

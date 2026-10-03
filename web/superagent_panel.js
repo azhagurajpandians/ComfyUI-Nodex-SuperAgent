@@ -232,6 +232,24 @@ function renderGeneratedImages(images, targetEl) {
   targetEl.scrollIntoView({ behavior: "smooth" });
 }
 
+// Helper: Load a workflow JSON by name into ComfyUI canvas
+async function loadWorkflowByName(name) {
+  try {
+    const res = await fetch(`/superagent/workflow?name=${encodeURIComponent(name)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Workflow not found");
+    if (app.loadGraphData) {
+      await app.loadGraphData(data);
+      app.graph?.setDirtyCanvas(true, true);
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.error("Failed to load workflow:", err);
+    return false;
+  }
+}
+
 // Helper: Run ComfyUI generation and track real-time progress & outputs
 function executeGeneration(promptText, statusEl) {
   const { positiveNode } = findPromptNodes();
@@ -245,12 +263,37 @@ function executeGeneration(promptText, statusEl) {
 
   return new Promise((resolve) => {
     let imagesFound = [];
+    let lastError = null;
 
     const onProgress = (e) => {
       const { value, max } = e.detail || {};
       if (statusEl && max) {
         const pct = Math.round((value / max) * 100);
         statusEl.innerHTML = `<div class="ca-status-bar"><span class="ca-spinner">⚙</span> Sampling step ${value}/${max} (${pct}%)</div>`;
+      }
+    };
+
+    const onExecuting = (e) => {
+      const nodeId = e.detail;
+      if (nodeId === null) {
+        // Queue has finished executing!
+        setTimeout(() => {
+          cleanup();
+          if (imagesFound.length > 0) {
+            renderGeneratedImages(imagesFound, statusEl);
+          } else if (lastError) {
+            statusEl.innerHTML = `<div class="ca-err">❌ Execution failed: ${lastError}</div>`;
+          } else {
+            statusEl.innerHTML = `<div class="ca-err">⚠️ Generation ended without output images. (Check ComfyUI Job Queue / Console for errors)</div>`;
+          }
+          resolve(imagesFound);
+        }, 500);
+      } else {
+        const node = app.graph?.getNodeById?.(nodeId);
+        const nodeTitle = node?.title || node?.type || `Node #${nodeId}`;
+        if (statusEl && !statusEl.innerHTML.includes("Sampling step")) {
+          statusEl.innerHTML = `<div class="ca-status-bar"><span class="ca-spinner">⚙</span> Executing ${nodeTitle}...</div>`;
+        }
       }
     };
 
@@ -261,41 +304,52 @@ function executeGeneration(promptText, statusEl) {
       }
     };
 
-    const onExecutionStart = () => {
-      if (statusEl) {
-        statusEl.innerHTML = `<div class="ca-status-bar"><span class="ca-spinner">⚙</span> Executing workflow on GPU...</div>`;
-      }
-    };
-
     const onError = (e) => {
+      const detail = e.detail || {};
+      const msg = detail.exception_message || detail.message || detail.exception_type || "Execution failed in ComfyUI";
+      lastError = msg;
       cleanup();
       if (statusEl) {
-        statusEl.innerHTML = `<div class="ca-err">Generation error: ${e.detail?.message || "Execution failed"}</div>`;
+        statusEl.innerHTML = `<div class="ca-err">❌ Generation error: ${msg}</div>`;
+      }
+      resolve(null);
+    };
+
+    const onInterrupted = () => {
+      cleanup();
+      if (statusEl) {
+        statusEl.innerHTML = `<div class="ca-err">⚠️ Generation was canceled / interrupted.</div>`;
       }
       resolve(null);
     };
 
     const onStatus = (e) => {
       const remaining = e.detail?.status?.exec_info?.queue_remaining;
-      if (remaining === 0 && imagesFound.length > 0) {
-        cleanup();
-        renderGeneratedImages(imagesFound, statusEl);
-        resolve(imagesFound);
+      if (remaining === 0) {
+        setTimeout(() => {
+          if (imagesFound.length > 0) {
+            cleanup();
+            renderGeneratedImages(imagesFound, statusEl);
+            resolve(imagesFound);
+          }
+        }, 500);
       }
     };
 
     const cleanup = () => {
       api.removeEventListener("progress", onProgress);
+      api.removeEventListener("executing", onExecuting);
       api.removeEventListener("executed", onExecuted);
-      api.removeEventListener("execution_start", onExecutionStart);
       api.removeEventListener("execution_error", onError);
+      api.removeEventListener("execution_interrupted", onInterrupted);
       api.removeEventListener("status", onStatus);
     };
 
     api.addEventListener("progress", onProgress);
+    api.addEventListener("executing", onExecuting);
     api.addEventListener("executed", onExecuted);
-    api.addEventListener("execution_start", onExecutionStart);
     api.addEventListener("execution_error", onError);
+    api.addEventListener("execution_interrupted", onInterrupted);
     api.addEventListener("status", onStatus);
 
     try {
@@ -306,13 +360,15 @@ function executeGeneration(promptText, statusEl) {
       resolve(null);
     }
 
-    // Safety fallback: if status event didn't trigger completion
+    // Safety fallback: if no event resolves within 3 minutes
     setTimeout(() => {
+      cleanup();
       if (imagesFound.length > 0) {
-        cleanup();
         renderGeneratedImages(imagesFound, statusEl);
-        resolve(imagesFound);
+      } else if (lastError) {
+        if (statusEl) statusEl.innerHTML = `<div class="ca-err">❌ Generation failed: ${lastError}</div>`;
       }
+      resolve(imagesFound);
     }, 180000);
   });
 }
@@ -595,11 +651,13 @@ function buildPanel(root, settingsBtn) {
         history.push({ role: "assistant", content: acc });
 
         // Parse Action Tags from assistant response
+        const loadMatch = acc.match(/\[ACTION:LOAD_WORKFLOW\s+name=["'](.*?)["'](?:\s+prompt=["'](.*?)["'])?\]/i);
         const genMatch = acc.match(/\[ACTION:GENERATE_IMAGE\s+prompt=["'](.*?)["']\]/i);
         const setMatch = acc.match(/\[ACTION:SET_PROMPT(?:\s+positive=["'](.*?)["'])?(?:\s+negative=["'](.*?)["'])?\]/i);
         const runMatch = acc.match(/\[ACTION:RUN_WORKFLOW\]/i);
 
         let cleanText = acc
+          .replace(/\[ACTION:LOAD_WORKFLOW\s+name=["'].*?["'](?:\s+prompt=["'].*?["'])?\]/gi, "")
           .replace(/\[ACTION:GENERATE_IMAGE\s+prompt=["'].*?["']\]/gi, "")
           .replace(/\[ACTION:SET_PROMPT(?:\s+positive=["'].*?["'])?(?:\s+negative=["'].*?["'])?\]/gi, "")
           .replace(/\[ACTION:RUN_WORKFLOW\]/gi, "")
@@ -612,7 +670,29 @@ function buildPanel(root, settingsBtn) {
           out.appendChild(textNode);
         }
 
-        if (genMatch) {
+        if (loadMatch) {
+          const wfName = loadMatch[1];
+          const promptToRun = loadMatch[2];
+          const badge = document.createElement("div");
+          badge.className = "ca-action-badge";
+          badge.innerHTML = `⚡ Action: Load Workflow "${wfName}"`;
+          out.prepend(badge);
+
+          const statusEl = document.createElement("div");
+          statusEl.innerHTML = `<div class="ca-status-bar"><span class="ca-spinner">⚙</span> Loading "${wfName}" onto canvas...</div>`;
+          out.appendChild(statusEl);
+          log.scrollTop = log.scrollHeight;
+
+          const ok = await loadWorkflowByName(wfName);
+          if (ok) {
+            statusEl.innerHTML = `<div class="ca-status-bar">✅ Workflow "${wfName}" loaded on canvas.</div>`;
+            if (promptToRun) {
+              await executeGeneration(promptToRun, statusEl);
+            }
+          } else {
+            statusEl.innerHTML = `<div class="ca-err">❌ Could not find or load workflow "${wfName}".</div>`;
+          }
+        } else if (genMatch) {
           const promptToRun = genMatch[1];
           const badge = document.createElement("div");
           badge.className = "ca-action-badge";

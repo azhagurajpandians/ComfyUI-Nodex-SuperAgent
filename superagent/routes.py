@@ -1,4 +1,6 @@
+import glob
 import json
+import os
 
 from aiohttp import web
 from server import PromptServer
@@ -7,9 +9,33 @@ from . import config, llm
 
 routes = PromptServer.instance.routes
 
+# Directory paths for workflow files
+_COMFY_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+)
+_WORKFLOWS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "workflows"
+)
+
 
 def _err(msg, status=500):
     return web.json_response({"error": str(msg)}, status=status)
+
+
+def _scan_workflows():
+    workflows = {}
+    # Scan ComfyUI root directory for .json workflow files
+    if os.path.isdir(_COMFY_ROOT):
+        for f in glob.glob(os.path.join(_COMFY_ROOT, "*.json")):
+            base = os.path.splitext(os.path.basename(f))[0]
+            workflows[base] = f
+
+    # Scan internal workflows/ directory
+    if os.path.isdir(_WORKFLOWS_DIR):
+        for f in glob.glob(os.path.join(_WORKFLOWS_DIR, "*.json")):
+            base = os.path.splitext(os.path.basename(f))[0]
+            workflows[base] = f
+    return workflows
 
 
 @routes.get("/superagent/config")
@@ -46,6 +72,33 @@ async def agent_models(request):
     })
 
 
+@routes.get("/superagent/workflows")
+async def agent_list_workflows(request):
+    wfs = _scan_workflows()
+    return web.json_response({"workflows": list(wfs.keys())})
+
+
+@routes.get("/superagent/workflow")
+async def agent_get_workflow(request):
+    name = request.query.get("name", "").strip().lower()
+    wfs = _scan_workflows()
+    target_path = None
+    for k, p in wfs.items():
+        if k.lower() == name or name in k.lower():
+            target_path = p
+            break
+
+    if not target_path or not os.path.isfile(target_path):
+        return _err(f"Workflow '{name}' not found. Available: {list(wfs.keys())}", 404)
+
+    try:
+        with open(target_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return web.json_response(data)
+    except Exception as e:
+        return _err(f"Failed to read workflow '{name}': {e}", 500)
+
+
 @routes.post("/superagent/unload")
 async def agent_unload(request):
     cfg = config.load()
@@ -63,9 +116,16 @@ async def agent_chat(request):
     body = await request.json()
     model = body.get("model") or cfg.get("default_model")
     system_prompt = cfg.get("system_prompt", config.AGENT_SYSTEM_PROMPT)
+
+    # Append available workflows list to context
+    wfs = list(_scan_workflows().keys())
+    if wfs:
+        system_prompt += f"\n\n--- AVAILABLE WORKFLOW TEMPLATES ON SYSTEM ---\n{', '.join(wfs)}\n---------------------------------------------"
+
     workflow_context = body.get("workflow_context")
     if workflow_context:
         system_prompt += f"\n\n--- ACTIVE COMFYUI CANVAS WORKFLOW ---\n{workflow_context}\n---------------------------------------"
+
     messages = [{"role": "system", "content": system_prompt}] + body.get("messages", [])
 
     resp = web.StreamResponse(
