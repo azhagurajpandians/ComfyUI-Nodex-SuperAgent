@@ -1,0 +1,14 @@
+[project]
+name = "comfyui-nodex-superagent"
+description = "SuperAgent inside ComfyUI: multi-provider AI assistant with live canvas workflow automation."
+version = "1.0.0"
+license = { text = "MIT" }
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/azhagurajpandians/ComfyUI-Nodex-SuperAgent"
+
+[tool.comfy]
+PublisherId = "azhagurajpandians"
+DisplayName = "ComfyUI-Nodex-SuperAgent"
+Icon = ""
