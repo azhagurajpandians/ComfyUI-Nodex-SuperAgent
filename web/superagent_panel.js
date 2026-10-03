@@ -99,6 +99,20 @@ const css = `
 .ca-img-btn{background:#333;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 7px;font-size:11px;cursor:pointer}
 .ca-img-btn:hover{background:#444}
 
+/* Interactive Option Chips */
+.ca-options-box{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;padding-top:6px;border-top:1px solid #388bfd33}
+.ca-option-chip{background:#182838;color:#79c0ff;border:1px solid #388bfd66;border-radius:12px;padding:3px 9px;font-size:11px;font-weight:600;cursor:pointer;transition:all 0.15s ease}
+.ca-option-chip:hover{background:#23405e;border-color:#58a6ff;color:#fff;transform:translateY(-1px)}
+
+/* Image Upload & Preview */
+.ca-upload-btn{background:#333;color:#eee;border:1px solid #555;border-radius:4px;padding:0 8px;cursor:pointer;font-size:13px}
+.ca-upload-btn:hover{background:#444}
+.ca-img-preview-box{display:none;align-items:center;gap:8px;padding:4px 8px;background:#181818;border-top:1px solid #333;font-size:11px;color:#aaa}
+.ca-img-preview-thumb{width:28px;height:28px;object-fit:cover;border-radius:3px;border:1px solid #555}
+.ca-img-preview-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ca-img-preview-rm{cursor:pointer;color:#f85149;font-weight:700;padding:0 4px}
+
+
 /* Settings view */
 .sa-settings-wrap{display:none;flex-direction:column;height:100%;background:var(--comfy-menu-bg,#202020);color:var(--fg-color,#ddd)}
 .sa-cfg-header{padding:8px 10px;background:#282828;border-bottom:1px solid #444;font-size:12px;font-weight:600;color:#ffd34d;display:flex;justify-content:space-between;align-items:center}
@@ -238,6 +252,11 @@ async function loadWorkflowByName(name) {
     const res = await fetch(`/superagent/workflow?name=${encodeURIComponent(name)}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Workflow not found");
+    if (data && typeof data === "object") {
+      if (data.links && (!data.version || parseFloat(data.version) < 0.4)) {
+        data.version = 0.4;
+      }
+    }
     if (typeof app.loadGraphData === "function") {
       await app.loadGraphData(data);
     } else if (app.graph && typeof app.graph.configure === "function") {
@@ -258,6 +277,26 @@ async function loadWorkflowByName(name) {
     console.error("Failed to load workflow:", err);
     return false;
   }
+}
+
+// Helper: Open ComfyUI's native Template Browser
+function openNativeTemplateBrowser() {
+  const sideBtn = document.querySelector('[data-testid="side-toolbar-templates"], button[title*="Templates"], .icon-\\[comfy--template\\]');
+  if (sideBtn) {
+    sideBtn.click();
+    return true;
+  }
+  if (typeof app.showTemplateDialog === "function") {
+    app.showTemplateDialog();
+    return true;
+  }
+  const buttons = Array.from(document.querySelectorAll("button, a, div[role='button']"));
+  const btn = buttons.find(b => (b.textContent || "").trim().toLowerCase() === "templates" || (b.title || "").toLowerCase().includes("templates"));
+  if (btn) {
+    btn.click();
+    return true;
+  }
+  return false;
 }
 
 // Helper: Run ComfyUI generation and track real-time progress & outputs
@@ -392,11 +431,19 @@ function buildPanel(root, settingsBtn) {
         <select class="ca-workflow" title="Load Workflow Template onto Canvas">
           <option value="">📁 Workflow: (Active)</option>
         </select>
+        <button class="ca-browse-templates" title="Open ComfyUI Templates Browser">Templates</button>
         <button class="ca-unload" title="Unload model from VRAM">Unload</button>
         <button class="ca-clear" title="Clear chat">Clear</button>
       </div>
       <div class="ca-log"></div>
+      <div class="ca-img-preview-box">
+        <img class="ca-img-preview-thumb" src="" alt="preview" />
+        <span class="ca-img-preview-name"></span>
+        <span class="ca-img-preview-rm" title="Remove attachment">✕</span>
+      </div>
       <div class="ca-in">
+        <input type="file" class="ca-file-input" accept="image/*" style="display:none">
+        <button class="ca-upload-btn" title="Upload image (Load onto canvas / send to vision)">📷</button>
         <textarea class="ca-text" placeholder="Message or ask to generate an image... (Enter = send, Shift+Enter = newline)"></textarea>
         <button class="ca-send">Send</button>
       </div>
@@ -440,6 +487,12 @@ function buildPanel(root, settingsBtn) {
           </div>
         </div>
         <div class="sa-cfg-group">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;text-transform:none;font-weight:normal;color:#eee">
+            <input type="checkbox" class="sa-cfg-options" checked>
+            <span>Enable Interactive Question Options (Clickable Chips)</span>
+          </label>
+        </div>
+        <div class="sa-cfg-group">
           <label>System Prompt</label>
           <textarea class="sa-cfg-prompt" rows="3"></textarea>
         </div>
@@ -455,6 +508,11 @@ function buildPanel(root, settingsBtn) {
   const settingsView = $(".sa-settings-wrap");
   const log = $(".ca-log"), sel = $(".ca-model"), box = $(".ca-text"), sendBtn = $(".ca-send");
   const provBadge = $(".ca-prov-badge"), unloadBtn = $(".ca-unload"), wfSel = $(".ca-workflow");
+  const templateBtn = $(".ca-browse-templates"), uploadBtn = $(".ca-upload-btn"), fileInput = $(".ca-file-input");
+  const previewBox = $(".ca-img-preview-box"), previewThumb = $(".ca-img-preview-thumb"), previewName = $(".ca-img-preview-name"), previewRm = $(".ca-img-preview-rm");
+  const cfgOptions = $(".sa-cfg-options");
+
+  let currentAttachment = null;
 
   // Settings inputs
   const cfgProv = $(".sa-cfg-provider"), cfgKey = $(".sa-cfg-key"), cfgUrl = $(".sa-cfg-url");
@@ -508,6 +566,7 @@ function buildPanel(root, settingsBtn) {
       cfgTemp.value = activeConfig.temperature != null ? activeConfig.temperature : 0.4;
       cfgCtx.value = activeConfig.num_ctx || 8192;
       cfgPrompt.value = activeConfig.system_prompt || "";
+      cfgOptions.checked = activeConfig.interactive_options !== false;
       updateHint(p);
     } catch (e) {
       console.error("Failed to load config:", e);
@@ -535,6 +594,7 @@ function buildPanel(root, settingsBtn) {
         default_model: cfgModel.value.trim(),
         temperature: parseFloat(cfgTemp.value) || 0.4,
         num_ctx: parseInt(cfgCtx.value, 10) || 8192,
+        interactive_options: cfgOptions.checked,
         system_prompt: cfgPrompt.value.trim(),
       };
       const res = await fetch("/superagent/config", {
@@ -558,6 +618,63 @@ function buildPanel(root, settingsBtn) {
 
   cancelBtn.onclick = () => toggleSettings(false);
   settingsBtn.onclick = () => toggleSettings();
+
+  // Browse ComfyUI Native Templates
+  templateBtn.onclick = () => {
+    const opened = openNativeTemplateBrowser();
+    if (!opened) {
+      add("ca-bot", "📁 Open ComfyUI Templates using the sidebar 'Templates' button or the Workflow dropdown above.");
+    }
+  };
+
+  // Image Upload Handling
+  uploadBtn.onclick = () => fileInput.click();
+
+  fileInput.onchange = async () => {
+    const file = fileInput.files?.[0];
+    if (!file) return;
+    try {
+      uploadBtn.textContent = "⏳";
+      const formData = new FormData();
+      formData.append("image", file);
+      formData.append("overwrite", "true");
+      const res = await fetch("/upload/image", { method: "POST", body: formData });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Upload failed");
+
+      currentAttachment = {
+        name: data.name,
+        subfolder: data.subfolder || "",
+        type: data.type || "input",
+        url: `/view?filename=${encodeURIComponent(data.name)}&subfolder=${encodeURIComponent(data.subfolder || "")}&type=${encodeURIComponent(data.type || "input")}`,
+      };
+
+      previewThumb.src = currentAttachment.url;
+      previewName.textContent = data.name;
+      previewBox.style.display = "flex";
+
+      // If active canvas has a LoadImage node, update it immediately
+      const imgNode = app.graph?._nodes?.find((n) => n.type === "LoadImage");
+      if (imgNode) {
+        const widget = imgNode.widgets?.find((w) => w.name === "image");
+        if (widget) {
+          widget.value = data.name;
+          app.graph.setDirtyCanvas(true, true);
+          add("ca-bot", `📷 Uploaded "${data.name}" and loaded into canvas LoadImage node.`);
+        }
+      }
+    } catch (err) {
+      alert("Image upload failed: " + err.message);
+    } finally {
+      uploadBtn.textContent = "📷";
+      fileInput.value = "";
+    }
+  };
+
+  previewRm.onclick = () => {
+    currentAttachment = null;
+    previewBox.style.display = "none";
+  };
 
   async function loadModels() {
     try {
@@ -637,10 +754,21 @@ function buildPanel(root, settingsBtn) {
 
   async function send() {
     const text = box.value.trim();
-    if (!text || busy) return;
+    if ((!text && !currentAttachment) || busy) return;
     busy = true; sendBtn.disabled = true; box.value = "";
-    add("ca-user", text);
-    history.push({ role: "user", content: text });
+
+    let userDisplay = text;
+    let userPrompt = text;
+    if (currentAttachment) {
+      const attachTag = `[Attached Image: ${currentAttachment.name}]`;
+      userDisplay = userDisplay ? `${userDisplay}\n📷 ${currentAttachment.name}` : `📷 ${currentAttachment.name}`;
+      userPrompt = userPrompt ? `${userPrompt}\n${attachTag}` : attachTag;
+      currentAttachment = null;
+      previewBox.style.display = "none";
+    }
+
+    add("ca-user", userDisplay);
+    history.push({ role: "user", content: userPrompt });
     const out = add("ca-bot", "…");
     let acc = "";
     let thinkAcc = "";
@@ -696,11 +824,23 @@ function buildPanel(root, settingsBtn) {
         const setMatch = acc.match(/\[ACTION:SET_PROMPT(?:\s+positive=["'](.*?)["'])?(?:\s+negative=["'](.*?)["'])?\]/i);
         const runMatch = acc.match(/\[ACTION:RUN_WORKFLOW\]/i);
 
+        // Parse Option Chips from assistant response
+        const optMatch = acc.match(/\[OPTIONS:\s*(.*?)\]/i);
+        let optionChips = [];
+        if (optMatch) {
+          const rawOpts = optMatch[1];
+          optionChips = rawOpts
+            .split("|")
+            .map((s) => s.trim().replace(/^["']|["']$/g, ""))
+            .filter(Boolean);
+        }
+
         let cleanText = acc
           .replace(/\[ACTION:(?:LOAD_WORKFLOW|SET_WORKFLOW|USE_WORKFLOW)\s+(?:name|template|workflow)=["']?.*?["']?(?:\s+prompt=["'].*?["'])?\]/gi, "")
           .replace(/\[ACTION:GENERATE_IMAGE\s+prompt=["'].*?["']\]/gi, "")
           .replace(/\[ACTION:SET_PROMPT(?:\s+positive=["'].*?["'])?(?:\s+negative=["'].*?["'])?\]/gi, "")
           .replace(/\[ACTION:RUN_WORKFLOW\]/gi, "")
+          .replace(/\[OPTIONS:\s*.*?\]/gi, "")
           .trim();
 
         out.innerHTML = "";
@@ -708,6 +848,22 @@ function buildPanel(root, settingsBtn) {
           const textNode = document.createElement("div");
           textNode.textContent = cleanText;
           out.appendChild(textNode);
+        }
+
+        if (optionChips.length > 0 && activeConfig.interactive_options !== false) {
+          const chipWrap = document.createElement("div");
+          chipWrap.className = "ca-options-box";
+          for (const opt of optionChips) {
+            const btn = document.createElement("button");
+            btn.className = "ca-option-chip";
+            btn.textContent = opt;
+            btn.onclick = () => {
+              box.value = opt;
+              send();
+            };
+            chipWrap.appendChild(btn);
+          }
+          out.appendChild(chipWrap);
         }
 
         if (loadMatch) {

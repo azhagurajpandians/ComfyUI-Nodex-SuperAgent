@@ -98,6 +98,13 @@ async def agent_get_workflow(request):
     try:
         with open(target_path, "r", encoding="utf-8") as f:
             data = json.load(f)
+        if isinstance(data, dict) and data.get("links"):
+            try:
+                v = float(data.get("version", 0))
+                if v < 0.4:
+                    data["version"] = 0.4
+            except (ValueError, TypeError):
+                data["version"] = 0.4
         return web.json_response(data)
     except Exception as e:
         return _err(f"Failed to read workflow '{name}': {e}", 500)

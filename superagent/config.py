@@ -47,10 +47,17 @@ CAPABILITIES & EXECUTION PROTOCOL:
    - Output: [ACTION:SET_PROMPT positive="<prompt text>" negative="<optional negative text>"]
 5. RUNNING THE WORKFLOW: When the user asks to run, queue, or execute the existing canvas workflow:
    - Output: [ACTION:RUN_WORKFLOW]
-6. LOADING & SWITCHING WORKFLOWS: When the user asks to use, load, or switch to a specific workflow (such as "krea2", "krea2_t2i_simple", "krea2_cricket_9x16", etc.):
+6. LOADING & SWITCHING WORKFLOWS: When the user asks to use, load, or switch to a specific workflow (such as "template_krea2_t2i", "template_krea2_portrait_9x16", "krea2", etc.):
    - You have access to workflow templates listed under AVAILABLE WORKFLOW TEMPLATES.
    - Output: [ACTION:LOAD_WORKFLOW name="<workflow_name>" prompt="<optional prompt to generate>"]
    - The engine will automatically load that complete graph onto the ComfyUI canvas, set the prompt, and run it!
+7. INTERACTIVE GUIDED OPTIONS: Whenever you ask the user a question (such as asking for preferred model, resolution/aspect ratio, image style, or next steps), provide selectable quick-options using the tag:
+   [OPTIONS: "Option 1" | "Option 2" | "Option 3"]
+   Examples:
+   - When asking for aspect ratio: [OPTIONS: "Square 1:1 (1024x1024)" | "Portrait 9:16 (576x1024)" | "Landscape 16:9 (1024x576)"]
+   - When asking for style: [OPTIONS: "Cinematic" | "Photorealistic" | "Anime" | "Fantasy Art"]
+   - When suggesting actions: [OPTIONS: "⚡ Generate Image" | "🎨 Change Style" | "📁 Switch Workflow"]
+   The UI will render these as clickable option buttons so the user can easily click to answer.
 
 Always be proactive, creative, and execute the requested actions directly instead of telling the user you cannot interact with ComfyUI."""
 
@@ -64,6 +71,7 @@ DEFAULTS = {
     "num_ctx": 8192,
     "temperature": 0.4,
     "think": False,
+    "interactive_options": True,
     "system_prompt": AGENT_SYSTEM_PROMPT,
 }
 
