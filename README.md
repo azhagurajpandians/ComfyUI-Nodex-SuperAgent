@@ -1,6 +1,6 @@
 # ComfyUI-Nodex-SuperAgent
 
-Nodex SuperAgent: local agent inside ComfyUI, powered by Ollama. Floating chat window (or dock it to the left) with streaming responses.
+Nodex SuperAgent: an AI assistant inside ComfyUI, supporting local models (Ollama) and cloud APIs (NVIDIA NIM, Google Gemini, OpenAI). Floating chat window (or dock it to the left) with streaming responses.
 
 **Status:** Phase 1 (skeleton). Chat only. No tool calling or workflow execution yet.
 
@@ -86,10 +86,11 @@ You can configure settings directly inside ComfyUI by clicking the **⚙** butto
 ## Panel controls
 
 - **⚡ launcher** (bottom-right): open or close the chat window
+- **⚙ Settings** (header): configure provider (Ollama, NVIDIA NIM, Gemini, OpenAI, Custom), API keys, endpoints, and parameters
 - **Float mode** (default): drag the header to move, drag the bottom-right corner to resize
 - **⇤ / ❐ button:** dock the chat to the left side of the page, or float it again. In docked mode, drag the right edge to change the width
-- **Model dropdown:** choose from installed Ollama models
-- **Unload:** free the selected model from VRAM/RAM
+- **Model dropdown:** select available models or enter a custom model
+- **Unload:** free the active local model from GPU VRAM/RAM (Ollama)
 - **Clear:** reset the conversation
 - **Enter** sends, **Shift+Enter** adds a newline
 
@@ -97,7 +98,7 @@ Window state (open/closed, mode, position, size) is remembered in the browser. D
 
 ## Hardware notes
 
-A 26B model at Q4_K_M will not fit in 8 GB VRAM. Ollama splits it across GPU and system RAM, so the first token is slow and generation is slower than a fully GPU-resident model. Do not keep the LLM and a ComfyUI generation loaded at the same time on a small GPU. Use **Unload** (or a short `keep_alive`) before heavy generations.
+A 26B model at Q4_K_M will not fit in 8 GB VRAM. Ollama splits it across GPU and system RAM, so the first token is slow and generation is slower than a fully GPU-resident model. Do not keep the LLM and a ComfyUI generation loaded at the same time on a small GPU. Use **Unload** (or a short `keep_alive`) before heavy generations, or switch to a cloud provider (NVIDIA NIM, Google Gemini, OpenAI) to completely bypass local GPU limits.
 
 Check the CPU/GPU split with `ollama ps`, and speed with `ollama run <model> --verbose`.
 
@@ -107,13 +108,6 @@ Check the CPU/GPU split with `ollama ps`, and speed with `ollama run <model> --v
 |---|---|
 | No ⚡ button | Folder name is `ComfyUI-Nodex-SuperAgent`; restart ComfyUI; check console for import errors |
 | "Ollama unreachable" | Ollama is running; `ollama_host` in `config.json` is correct |
-| Model list empty | Run `ollama list`; pull a model |
-| Very slow first reply | Model is loading and splitting across CPU/GPU. Normal on 8 GB VRAM |
+| Model list empty | Run `ollama list`; pull a model, or check API key in Settings (⚙) |
+| Very slow first reply | Local model is loading and splitting across CPU/GPU. Normal on 8 GB VRAM |
 | Panel loads but chat errors | Open browser dev console (F12) and ComfyUI console for the message |
-
-## Roadmap
-
-- **Phase 2:** ComfyUI tool layer (`queue_prompt`, progress, results), native tool calling, VRAM manager (unload LLM before generation, free ComfyUI models after)
-- **Phase 3:** workflow templates with exposed params, router
-- **Phase 4:** planner loop with confirm gate and step/retry caps
-- **Phase 5+:** vision critic, self-healing on errors, memory, pipeline integrations (EXR/OCIO, Kitsu), scheduler
