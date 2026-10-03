@@ -406,8 +406,8 @@ function getWorkflowContext() {
 - Current Resolution: ${resStr}
 - Active Input Image: ${imgVal ? `"${imgVal}" (LoadImage Node #${imgNode.id})` : "None (Text-to-Image)"}
 - Sampler Settings: ${samplerName} | Steps: ${steps} | CFG: ${cfg} | Denoise: ${denoise}
-- Positive Prompt (Node ${positiveNode ? positiveNode.id : "?"}): "${posVal}"
-- Negative Prompt (Node ${negativeNode ? negativeNode.id : "?"}): "${negVal}"
+- Previous Canvas Positive Prompt (Node ${positiveNode ? positiveNode.id : "?"}): "${posVal}"
+- Previous Canvas Negative Prompt (Node ${negativeNode ? negativeNode.id : "?"}): "${negVal}"
 - Nodes Present: ${nodeTypes}
 - Total Active Nodes: ${nodes.length}`;
 }

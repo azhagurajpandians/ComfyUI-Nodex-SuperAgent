@@ -191,6 +191,19 @@ async def agent_chat(request):
         system_prompt += f"\n\n--- ACTIVE COMFYUI CANVAS WORKFLOW ---\n{workflow_context}\n---------------------------------------"
 
     raw_messages = body.get("messages", [])
+    has_attached_image = any(
+        msg.get("attachment") or "[Attached Image:" in str(msg.get("content", ""))
+        for msg in raw_messages
+    )
+    if has_attached_image:
+        system_prompt += (
+            "\n\n--- CRITICAL INSTRUCTION FOR ATTACHED IMAGES ---\n"
+            "An image is attached for analysis. You MUST inspect the visual elements, people, objects, clothing, and setting of the attached image!\n"
+            "DO NOT repeat, echo, or output the 'Previous Canvas Positive Prompt' from the ACTIVE COMFYUI CANVAS WORKFLOW above, as that is an old prompt from a past run.\n"
+            "Craft a fresh, original, highly detailed prompt describing what you actually see in the attached image.\n"
+            "------------------------------------------------"
+        )
+
     formatted_messages = [{"role": "system", "content": system_prompt}]
     provider = llm.get_provider(cfg)
 
