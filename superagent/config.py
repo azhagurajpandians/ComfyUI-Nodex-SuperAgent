@@ -13,7 +13,7 @@ PROVIDER_PRESETS = {
     },
     "nvidia": {
         "base_url": "https://integrate.api.nvidia.com/v1",
-        "default_model": "meta/llama-3.3-70b-instruct",
+        "default_model": "meta/llama-3.2-11b-vision-instruct",
         "requires_key": True,
     },
     "openai": {

@@ -16,7 +16,7 @@ const PROVIDER_INFO = {
   nvidia: {
     name: "NVIDIA NIM (Cloud API)",
     default_url: "https://integrate.api.nvidia.com/v1",
-    default_model: "meta/llama-3.3-70b-instruct",
+    default_model: "meta/llama-3.2-11b-vision-instruct",
     hint: "NVIDIA NIM Cloud. Zero VRAM impact on ComfyUI! Free API key from build.nvidia.com.",
     key_placeholder: "nvapi-...",
   },

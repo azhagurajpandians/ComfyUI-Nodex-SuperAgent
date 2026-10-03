@@ -10,11 +10,12 @@ PROVIDER_DEFAULT_MODELS = {
         "mistral:7b",
     ],
     "nvidia": [
-        "meta/llama-3.3-70b-instruct",
-        "meta/llama-3.1-8b-instruct",
-        "deepseek-ai/deepseek-r1",
-        "nvidia/llama-3.1-nemotron-70b-instruct",
-        "mistralai/mistral-large-2-instruct",
+        "meta/llama-3.2-11b-vision-instruct",
+        "google/diffusiongemma-26b-a4b-it",
+        "openai/gpt-oss-20b",
+        "poolside/laguna-xs-2.1",
+        "meta/muse-glimmer-30b",
+        "nvidia/nemotron-3-ultra-550b-a55b",
     ],
     "openai": [
         "gpt-4o-mini",
