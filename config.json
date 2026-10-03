@@ -1,0 +1,9 @@
+{
+  "ollama_host": "http://127.0.0.1:11434",
+  "default_model": "gemma4:26b",
+  "keep_alive": "5m",
+  "num_ctx": 8192,
+  "temperature": 0.3,
+  "think": false,
+  "system_prompt": "You are Nodex SuperAgent, an agent inside ComfyUI. Be terse and direct. Plain text only."
+}
