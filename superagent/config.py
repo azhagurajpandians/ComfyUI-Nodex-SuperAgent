@@ -1,7 +1,9 @@
 import json
 import os
 
-_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json")
+_ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+_PATH = os.path.join(_ROOT_DIR, "config.json")
+_LOCAL_PATH = os.path.join(_ROOT_DIR, "config.local.json")
 
 PROVIDER_PRESETS = {
     "ollama": {
@@ -63,20 +65,47 @@ DEFAULTS = {
 
 
 def load():
-    """Re-read config.json on every call so edits apply without a restart."""
+    """Load configuration with layered overrides:
+    1. Built-in DEFAULTS
+    2. Base config.json (git-tracked template)
+    3. User overrides from config.local.json (git-ignored for security)
+    4. Environment variable fallbacks
+    """
     cfg = dict(DEFAULTS)
+
+    # 1. Base template
     try:
         with open(_PATH, "r", encoding="utf-8") as f:
             cfg.update(json.load(f))
     except (FileNotFoundError, json.JSONDecodeError):
         pass
+
+    # 2. Local secrets and user configurations (ignored by git)
+    try:
+        with open(_LOCAL_PATH, "r", encoding="utf-8") as f:
+            cfg.update(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+
+    # 3. Environment variable fallback if api_key not set in config
+    if not cfg.get("api_key"):
+        prov = cfg.get("provider", "ollama").lower()
+        if prov == "nvidia":
+            cfg["api_key"] = os.environ.get("NVIDIA_API_KEY", "")
+        elif prov == "openai":
+            cfg["api_key"] = os.environ.get("OPENAI_API_KEY", "")
+        elif prov == "gemini":
+            cfg["api_key"] = os.environ.get("GEMINI_API_KEY", os.environ.get("GOOGLE_API_KEY", ""))
+
     return cfg
 
 
 def save(new_cfg):
-    """Update and persist config.json."""
+    """Save user settings and API keys to config.local.json.
+    This ensures API keys and personal credentials are NEVER committed or pushed to Git/GitHub.
+    """
     cfg = load()
     cfg.update(new_cfg)
-    with open(_PATH, "w", encoding="utf-8") as f:
+    with open(_LOCAL_PATH, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2)
     return cfg

@@ -15,5 +15,10 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Local User Secrets & Configs (NEVER commit to GitHub)
+config.local.json
+*.local.json
+.env
+
 # Stray folders
 mnt/
