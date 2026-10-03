@@ -42,6 +42,11 @@ class TestConfig(unittest.TestCase):
 
     def test_security_secrets_isolation(self):
         # Verify saving writes to config.local.json and never pollutes config.json
+        original_local_content = None
+        if os.path.exists(config._LOCAL_PATH):
+            with open(config._LOCAL_PATH, "r", encoding="utf-8") as f:
+                original_local_content = f.read()
+
         test_key = "nvapi-secret-test-key-12345"
         try:
             config.save({"api_key": test_key})
@@ -60,7 +65,10 @@ class TestConfig(unittest.TestCase):
             loaded = config.load()
             self.assertEqual(loaded.get("api_key"), test_key)
         finally:
-            if os.path.exists(config._LOCAL_PATH):
+            if original_local_content is not None:
+                with open(config._LOCAL_PATH, "w", encoding="utf-8") as f:
+                    f.write(original_local_content)
+            elif os.path.exists(config._LOCAL_PATH):
                 os.remove(config._LOCAL_PATH)
 
 

@@ -44,10 +44,11 @@ const PROVIDER_INFO = {
 };
 
 const css = `
-.sa-launcher{position:fixed;right:20px;bottom:20px;z-index:9998;width:48px;height:48px;border-radius:50%;
-  border:1px solid #666;background:#2a2a2a;color:#ffd34d;font-size:22px;cursor:pointer;
+.sa-launcher{position:fixed;z-index:9998;width:48px;height:48px;border-radius:50%;
+  border:1px solid #666;background:#2a2a2a;color:#ffd34d;font-size:22px;cursor:grab;touch-action:none;user-select:none;
   box-shadow:0 4px 14px rgba(0,0,0,.5);transition:transform 0.15s ease}
 .sa-launcher:hover{background:#383838;transform:scale(1.06)}
+.sa-launcher:active{cursor:grabbing}
 .sa-launcher.sa-on{background:#ffd34d;color:#222}
 .sa-win{position:fixed;z-index:9999;display:none;flex-direction:column;background:var(--comfy-menu-bg,#202020);
   color:var(--fg-color,#ddd);border:1px solid #555;border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,.55);
@@ -133,7 +134,7 @@ const css = `
 `;
 
 const ui = Object.assign(
-  { mode: "float", open: false, x: null, y: null, w: 440, h: 580, dockW: 400 },
+  { mode: "float", open: false, x: null, y: null, w: 440, h: 580, dockW: 400, launcherX: null, launcherY: null },
   (() => { try { return JSON.parse(localStorage.getItem(STORE)) || {}; } catch { return {}; } })()
 );
 const save = () => { try { localStorage.setItem(STORE, JSON.stringify(ui)); } catch {} };
@@ -189,57 +190,140 @@ function setNodePromptText(node, text) {
   return false;
 }
 
+// Helper: Map aspect ratio text to known combo values
+function resolveAspectRatioCombo(options, req) {
+  if (!options || !Array.isArray(options) || !req) return null;
+  const clean = req.toLowerCase().replace(/[\s\-_:]/g, "");
+  // 1. Direct match
+  for (const opt of options) {
+    const optClean = opt.toLowerCase().replace(/[\s\-_:]/g, "");
+    if (optClean.includes(clean) || clean.includes(optClean)) return opt;
+  }
+  // 2. Keyword mapping
+  if (clean.includes("169") || clean.includes("landscape") || clean.includes("wide")) {
+    return options.find((o) => o.includes("16:9") || o.toLowerCase().includes("wide"));
+  }
+  if (clean.includes("916") || clean.includes("portrait")) {
+    return options.find((o) => o.includes("9:16") || o.toLowerCase().includes("portrait"));
+  }
+  if (clean.includes("11") || clean.includes("square")) {
+    return options.find((o) => o.includes("1:1") || o.toLowerCase().includes("square"));
+  }
+  if (clean.includes("43")) {
+    return options.find((o) => o.includes("4:3"));
+  }
+  if (clean.includes("34")) {
+    return options.find((o) => o.includes("3:4"));
+  }
+  if (clean.includes("219") || clean.includes("ultra")) {
+    return options.find((o) => o.includes("21:9") || o.toLowerCase().includes("ultra"));
+  }
+  return null;
+}
+
 // Helper: Locate latent or resolution node on canvas
 function findLatentOrResolutionNode() {
   const nodes = app.graph?._nodes || [];
   return nodes.find(
     (n) =>
+      n.type === "ResolutionSelector" ||
+      (n.widgets && n.widgets.some((w) => w.name === "aspect_ratio")) ||
       n.type === "EmptySD3LatentImage" ||
       n.type === "EmptyLatentImage" ||
       n.type === "EmptyLatentImagePresets" ||
-      n.type === "ResolutionSelector" ||
       (n.widgets && n.widgets.some((w) => w.name === "width") && n.widgets.some((w) => w.name === "height"))
   );
 }
 
-// Helper: Set resolution (width & height) on active canvas latent node
-function setCanvasResolution(width, height) {
-  const node = findLatentOrResolutionNode();
-  if (!node) return { success: false, error: "No latent resolution node found on canvas" };
+// Helper: Set resolution (width & height, or aspect_ratio) on active canvas nodes
+function setCanvasResolution(width, height, aspect) {
+  const nodes = app.graph?._nodes || [];
+  let updatedAny = false;
+  let details = [];
 
-  const wVal = parseInt(width, 10);
-  const hVal = parseInt(height, 10);
-  let updatedW = false;
-  let updatedH = false;
+  let reqAspect = (aspect || "").toLowerCase();
+  let wVal = width ? parseInt(width, 10) : null;
+  let hVal = height ? parseInt(height, 10) : null;
 
-  for (const w of node.widgets || []) {
-    if (w.name === "width") {
-      w.value = wVal;
-      if (w.callback) w.callback(wVal);
-      updatedW = true;
+  if ((!wVal || !hVal) && reqAspect) {
+    if (reqAspect.includes("16:9") || reqAspect.includes("landscape") || reqAspect.includes("wide")) {
+      wVal = 1024; hVal = 576; reqAspect = "16:9";
+    } else if (reqAspect.includes("9:16") || reqAspect.includes("portrait")) {
+      wVal = 576; hVal = 1024; reqAspect = "9:16";
+    } else if (reqAspect.includes("1:1") || reqAspect.includes("square")) {
+      wVal = 1024; hVal = 1024; reqAspect = "1:1";
+    } else if (reqAspect.includes("4:3")) {
+      wVal = 1024; hVal = 768; reqAspect = "4:3";
+    } else if (reqAspect.includes("3:4")) {
+      wVal = 768; hVal = 1024; reqAspect = "3:4";
+    } else if (reqAspect.includes("21:9") || reqAspect.includes("ultra")) {
+      wVal = 1344; hVal = 576; reqAspect = "21:9";
     }
-    if (w.name === "height") {
-      w.value = hVal;
-      if (w.callback) w.callback(hVal);
-      updatedH = true;
+  }
+
+  if (wVal && hVal && !reqAspect) {
+    if (wVal === hVal) reqAspect = "1:1";
+    else if (wVal > hVal) reqAspect = "16:9";
+    else reqAspect = "9:16";
+  }
+
+  // 1. Look for ResolutionSelector or nodes with aspect_ratio widget
+  for (const node of nodes) {
+    if (node.widgets) {
+      const aspectWidget = node.widgets.find((w) => ["aspect_ratio", "ratio", "aspect"].includes(w.name));
+      if (aspectWidget) {
+        const comboValues = (aspectWidget.options && aspectWidget.options.values) || [
+          "1:1 (Square)", "2:3 (Portrait Photo)", "3:2 (Photo)", "3:4 (Portrait Standard)",
+          "4:3 (Standard)", "9:16 (Portrait Widescreen)", "16:9 (Widescreen)", "21:9 (Ultrawide)"
+        ];
+        let matched = resolveAspectRatioCombo(comboValues, reqAspect || `${wVal}:${hVal}`);
+        if (!matched && reqAspect) {
+          matched = reqAspect;
+        }
+        if (matched) {
+          aspectWidget.value = matched;
+          if (aspectWidget.callback) aspectWidget.callback(matched);
+          node.setDirtyCanvas?.(true, true);
+          updatedAny = true;
+          details.push(`${node.title || node.type} aspect -> ${matched}`);
+        }
+      }
     }
   }
 
-  // Fallback to widget index if names not found
-  if (!updatedW && node.widgets && node.widgets[0]) {
-    node.widgets[0].value = wVal;
-    if (node.widgets[0].callback) node.widgets[0].callback(wVal);
-    updatedW = true;
-  }
-  if (!updatedH && node.widgets && node.widgets[1]) {
-    node.widgets[1].value = hVal;
-    if (node.widgets[1].callback) node.widgets[1].callback(hVal);
-    updatedH = true;
+  // 2. Also look for EmptyLatentImage / EmptySD3LatentImage / width & height nodes
+  for (const node of nodes) {
+    if (node.widgets && (wVal || hVal)) {
+      let updatedNode = false;
+      for (const w of node.widgets) {
+        if (w.name === "width" && wVal) {
+          w.value = wVal;
+          if (w.callback) w.callback(wVal);
+          updatedNode = true;
+        }
+        if (w.name === "height" && hVal) {
+          w.value = hVal;
+          if (w.callback) w.callback(hVal);
+          updatedNode = true;
+        }
+      }
+      if (updatedNode) {
+        node.setDirtyCanvas?.(true, true);
+        updatedAny = true;
+        details.push(`${node.title || node.type} -> ${wVal}x${hVal}`);
+      }
+    }
   }
 
-  node.setDirtyCanvas?.(true, true);
-  app.graph?.setDirtyCanvas(true, true);
-  return { success: true, nodeTitle: node.title || node.type, width: wVal, height: hVal };
+  if (updatedAny) {
+    app.graph?.setDirtyCanvas(true, true);
+    if (app.canvas && typeof app.canvas.draw === "function") {
+      app.canvas.draw(true, true);
+    }
+    return { success: true, details: details.join(", "), width: wVal, height: hVal, aspect: reqAspect };
+  }
+
+  return { success: false, error: "No resolution or latent node found on canvas" };
 }
 
 // Helper: Set KSampler settings on active canvas
@@ -879,6 +963,21 @@ function buildPanel(root, settingsBtn) {
 
     add("ca-user", userDisplay);
     history.push({ role: "user", content: userPrompt });
+
+    // Immediate Direct Intent Detection: Resolution Change (with typo tolerance)
+    const aspectTokenMatch = text.match(/(16[:/x]9|9[:/x]16|1[:/x]1|4[:/x]3|3[:/x]4|21[:/x]9|landscape|portrait|square|widescreen|ultrawide)/i);
+    const hasResIntent = /change|chnage|set|switch|make|adjust|update|res|resol|aspect|ratio|format/i.test(text);
+    if (aspectTokenMatch && (hasResIntent || /16[:/x]9|9[:/x]16/i.test(text))) {
+      const targetAspect = aspectTokenMatch[1].replace(/[/x]/g, ":");
+      const resResult = setCanvasResolution(null, null, targetAspect);
+      if (resResult.success) {
+        const badge = document.createElement("div");
+        badge.className = "ca-action-badge";
+        badge.innerHTML = `📐 Action: Resolution updated on canvas (${resResult.details})`;
+        log.appendChild(badge);
+      }
+    }
+
     const out = add("ca-bot", "…");
     let acc = "";
     let thinkAcc = "";
@@ -982,33 +1081,16 @@ function buildPanel(root, settingsBtn) {
 
         // 1. Apply Resolution Change if requested
         if (resMatch) {
-          let reqW = resMatch[1];
-          let reqH = resMatch[2];
+          const reqW = resMatch[1];
+          const reqH = resMatch[2];
           const reqAspect = (resMatch[3] || "").toLowerCase();
-          if ((!reqW || !reqH) && reqAspect) {
-            if (reqAspect.includes("16:9") || reqAspect.includes("landscape")) {
-              reqW = 1024; reqH = 576;
-            } else if (reqAspect.includes("9:16") || reqAspect.includes("portrait")) {
-              reqW = 576; reqH = 1024;
-            } else if (reqAspect.includes("1:1") || reqAspect.includes("square")) {
-              reqW = 1024; reqH = 1024;
-            } else if (reqAspect.includes("4:3")) {
-              reqW = 1024; reqH = 768;
-            } else if (reqAspect.includes("3:4")) {
-              reqW = 768; reqH = 1024;
-            } else if (reqAspect.includes("21:9")) {
-              reqW = 1344; reqH = 576;
-            }
-          }
-          if (reqW && reqH) {
-            const resResult = setCanvasResolution(reqW, reqH);
-            const badge = document.createElement("div");
-            badge.className = "ca-action-badge";
-            badge.innerHTML = resResult.success
-              ? `📐 Action: Resolution set to ${reqW}x${reqH} (${reqAspect || "custom"}) on ${resResult.nodeTitle}`
-              : `⚠️ Action: Resolution change failed: ${resResult.error}`;
-            out.prepend(badge);
-          }
+          const resResult = setCanvasResolution(reqW, reqH, reqAspect);
+          const badge = document.createElement("div");
+          badge.className = "ca-action-badge";
+          badge.innerHTML = resResult.success
+            ? `📐 Action: Resolution updated on canvas (${resResult.details})`
+            : `⚠️ Action: Resolution change failed: ${resResult.error}`;
+          out.prepend(badge);
         }
 
         // 2. Apply Sampler Change if requested
@@ -1174,18 +1256,91 @@ function createUI() {
     dockBtn.title = ui.mode === "dock" ? "Float window" : "Dock to left";
   }
 
-  launcher.onclick = () => { ui.open = !ui.open; save(); apply(); };
+  function applyLauncherPosition() {
+    if (ui.launcherX == null || ui.launcherY == null) {
+      launcher.style.right = "20px";
+      launcher.style.bottom = "20px";
+      launcher.style.left = "auto";
+      launcher.style.top = "auto";
+    } else {
+      ui.launcherX = clamp(ui.launcherX, 0, innerWidth - 56);
+      ui.launcherY = clamp(ui.launcherY, 0, innerHeight - 56);
+      launcher.style.left = ui.launcherX + "px";
+      launcher.style.top = ui.launcherY + "px";
+      launcher.style.right = "auto";
+      launcher.style.bottom = "auto";
+    }
+  }
+
+  // Draggable launcher icon (⚡)
+  let launcherMoved = false;
+  let lStartX = 0, lStartY = 0;
+  let lInitX = 0, lInitY = 0;
+
+  launcher.addEventListener("pointerdown", (e) => {
+    launcherMoved = false;
+    lStartX = e.clientX;
+    lStartY = e.clientY;
+    const rect = launcher.getBoundingClientRect();
+    lInitX = rect.left;
+    lInitY = rect.top;
+    launcher.setPointerCapture(e.pointerId);
+
+    const onMove = (ev) => {
+      const dx = ev.clientX - lStartX;
+      const dy = ev.clientY - lStartY;
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        launcherMoved = true;
+      }
+      ui.launcherX = lInitX + dx;
+      ui.launcherY = lInitY + dy;
+      applyLauncherPosition();
+    };
+
+    const onUp = (ev) => {
+      launcher.removeEventListener("pointermove", onMove);
+      launcher.removeEventListener("pointerup", onUp);
+      try { launcher.releasePointerCapture(ev.pointerId); } catch {}
+      if (launcherMoved) {
+        save();
+      } else {
+        ui.open = !ui.open;
+        save();
+        apply();
+      }
+    };
+
+    launcher.addEventListener("pointermove", onMove);
+    launcher.addEventListener("pointerup", onUp);
+  });
+
   win.querySelector(".sa-close").onclick = () => { ui.open = false; save(); apply(); };
   dockBtn.onclick = () => { ui.mode = ui.mode === "dock" ? "float" : "dock"; save(); apply(); };
-  addEventListener("resize", apply);
+  addEventListener("resize", () => {
+    apply();
+    applyLauncherPosition();
+  });
 
-  // drag (float mode)
+  // drag (float mode, or auto-undock when dragging header from dock mode)
   head.addEventListener("pointerdown", (e) => {
-    if (ui.mode !== "float" || e.target.closest("button")) return;
+    if (e.target.closest("button")) return;
+    if (ui.mode === "dock") {
+      ui.mode = "float";
+      ui.w = clamp(ui.dockW, 320, innerWidth - 16);
+      ui.x = clamp(e.clientX - 120, 0, innerWidth - ui.w);
+      ui.y = clamp(e.clientY - 20, 0, innerHeight - 100);
+      save();
+      apply();
+    }
     const dx = e.clientX - ui.x, dy = e.clientY - ui.y;
     head.setPointerCapture(e.pointerId);
     const move = (ev) => { ui.x = ev.clientX - dx; ui.y = ev.clientY - dy; apply(); };
-    const up = () => { head.removeEventListener("pointermove", move); head.removeEventListener("pointerup", up); save(); };
+    const up = (ev) => {
+      head.removeEventListener("pointermove", move);
+      head.removeEventListener("pointerup", up);
+      try { head.releasePointerCapture(ev.pointerId); } catch {}
+      save();
+    };
     head.addEventListener("pointermove", move);
     head.addEventListener("pointerup", up);
   });
@@ -1209,6 +1364,7 @@ function createUI() {
     clearTimeout(t); t = setTimeout(save, 300);
   }).observe(win);
 
+  applyLauncherPosition();
   apply();
 }
 
