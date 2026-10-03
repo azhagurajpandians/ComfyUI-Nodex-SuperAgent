@@ -44,27 +44,44 @@ ComfyUI-Nodex-SuperAgent/
    └─ superagent_panel.js    # floating / docked chat window
 ```
 
+## Supported Providers & Integrations
+
+Nodex SuperAgent supports multiple LLM backends:
+
+1. **Ollama (Local)**: Runs locally on your system (`http://127.0.0.1:11434`).
+2. **NVIDIA NIM (Cloud API)**: Offload LLM inference entirely to NVIDIA's cloud with zero local GPU VRAM impact. Free API keys available at [build.nvidia.com](https://build.nvidia.com).
+3. **Google Gemini (Cloud API)**: Fast responses and large context windows via Google AI Studio (`gemini-2.0-flash`, `gemini-1.5-pro`).
+4. **OpenAI (Cloud API)**: Direct OpenAI endpoint (`gpt-4o`, `gpt-4o-mini`, `o3-mini`).
+5. **Custom / OpenAI-Compatible**: Any endpoint like Groq, OpenRouter, DeepSeek, vLLM, or LMStudio.
+
+> **💡 Low VRAM Tip:** If Ollama hits CUDA Out of Memory (OOM) because ComfyUI is using your GPU, click **⚙ (Settings)** in the panel header, select **NVIDIA NIM** or **Google Gemini**, enter your API key, and chat without using any local VRAM!
+
 ## Configuration
 
-Edit `config.json`. Changes apply on the next request, no restart needed.
+You can configure settings directly inside ComfyUI by clicking the **⚙** button in the chat header, or by editing `config.json`. Changes apply immediately without restarting ComfyUI.
 
 | Key | Default | Notes |
 |---|---|---|
-| `ollama_host` | `http://127.0.0.1:11434` | Point to a remote host to offload the LLM |
-| `default_model` | `gemma4:26b` | Model preselected in the panel |
-| `keep_alive` | `5m` | How long Ollama keeps the model loaded after the last request. Set to `0` to evict immediately after reply |
-| `num_ctx` | `8192` | Context window per request. Keep low to save VRAM/RAM |
-| `temperature` | `0.3` | Low for routing and tool use |
-| `think` | `false` | Thinking mode. Off for speed |
+| `provider` | `ollama` | Provider: `ollama`, `nvidia`, `openai`, `gemini`, or `custom` |
+| `api_key` | `""` | API key for cloud providers (`nvapi-...`, `sk-...`, `AIzaSy...`) |
+| `base_url` | auto | Base URL endpoint for the selected provider |
+| `ollama_host` | `http://127.0.0.1:11434` | Ollama host address |
+| `default_model` | `llama3.1:8b` | Preselected model identifier |
+| `keep_alive` | `5m` | Ollama model unload timeout (`0` = unload immediately after reply) |
+| `num_ctx` | `8192` | Context window size / max tokens |
+| `temperature` | `0.3` | Sampling temperature |
+| `think` | `false` | Thinking mode for supported reasoning models |
 | `system_prompt` | terse, plain text | Prepended to every chat |
 
 ## Endpoints
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/superagent/models` | List installed Ollama models and the default |
-| POST | `/superagent/chat` | Stream a chat. Body: `{model, messages, think?}`. Response: NDJSON chunks `{content, thinking, tool_calls, done}` or `{error, done}` |
-| POST | `/superagent/unload` | Evict a model from memory. Body: `{model}` |
+| GET | `/superagent/config` | Retrieve current configuration and provider presets |
+| POST | `/superagent/config` | Update and persist settings to `config.json` |
+| GET | `/superagent/models` | List available models for the active provider |
+| POST | `/superagent/chat` | Stream chat. Body: `{model, messages, think?}`. NDJSON response |
+| POST | `/superagent/unload` | Evict local model from memory (Ollama only) |
 
 ## Panel controls
 

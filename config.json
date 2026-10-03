@@ -1,6 +1,9 @@
 {
+  "provider": "ollama",
   "ollama_host": "http://127.0.0.1:11434",
-  "default_model": "gemma4:26b",
+  "base_url": "http://127.0.0.1:11434",
+  "api_key": "",
+  "default_model": "llama3.1:8b",
   "keep_alive": "5m",
   "num_ctx": 8192,
   "temperature": 0.3,
