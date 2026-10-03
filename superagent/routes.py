@@ -82,9 +82,13 @@ async def agent_list_workflows(request):
 async def agent_get_workflow(request):
     name = request.query.get("name", "").strip().lower()
     wfs = _scan_workflows()
+    name_clean = name.lower()
+    name_norm = name_clean.replace(" ", "").replace("_", "").replace("-", "")
     target_path = None
     for k, p in wfs.items():
-        if k.lower() == name or name in k.lower():
+        k_clean = k.lower()
+        k_norm = k_clean.replace(" ", "").replace("_", "").replace("-", "")
+        if k_clean == name_clean or name_clean in k_clean or name_norm in k_norm or k_norm in name_norm:
             target_path = p
             break
 

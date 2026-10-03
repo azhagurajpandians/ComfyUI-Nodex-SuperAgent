@@ -238,12 +238,22 @@ async function loadWorkflowByName(name) {
     const res = await fetch(`/superagent/workflow?name=${encodeURIComponent(name)}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Workflow not found");
-    if (app.loadGraphData) {
+    if (typeof app.loadGraphData === "function") {
       await app.loadGraphData(data);
-      app.graph?.setDirtyCanvas(true, true);
-      return true;
+    } else if (app.graph && typeof app.graph.configure === "function") {
+      app.graph.configure(data);
     }
-    return false;
+    // Refresh canvas and center
+    if (app.canvas && typeof app.canvas.draw === "function") {
+      app.canvas.draw(true, true);
+    }
+    app.graph?.setDirtyCanvas?.(true, true);
+    try {
+      if (app.canvas && typeof app.canvas.centerOnNode === "function" && app.graph?._nodes?.[0]) {
+        app.canvas.centerOnNode(app.graph._nodes[0]);
+      }
+    } catch {}
+    return true;
   } catch (err) {
     console.error("Failed to load workflow:", err);
     return false;
@@ -378,7 +388,10 @@ function buildPanel(root, settingsBtn) {
     <div class="ca-wrap">
       <div class="ca-bar">
         <span class="ca-prov-badge">OLLAMA</span>
-        <select class="ca-model"></select>
+        <select class="ca-model" title="Model Selector"></select>
+        <select class="ca-workflow" title="Load Workflow Template onto Canvas">
+          <option value="">📁 Workflow: (Active)</option>
+        </select>
         <button class="ca-unload" title="Unload model from VRAM">Unload</button>
         <button class="ca-clear" title="Clear chat">Clear</button>
       </div>
@@ -441,7 +454,7 @@ function buildPanel(root, settingsBtn) {
   const chatView = $(".ca-wrap");
   const settingsView = $(".sa-settings-wrap");
   const log = $(".ca-log"), sel = $(".ca-model"), box = $(".ca-text"), sendBtn = $(".ca-send");
-  const provBadge = $(".ca-prov-badge"), unloadBtn = $(".ca-unload");
+  const provBadge = $(".ca-prov-badge"), unloadBtn = $(".ca-unload"), wfSel = $(".ca-workflow");
 
   // Settings inputs
   const cfgProv = $(".sa-cfg-provider"), cfgKey = $(".sa-cfg-key"), cfgUrl = $(".sa-cfg-url");
@@ -595,6 +608,33 @@ function buildPanel(root, settingsBtn) {
     }
   });
 
+  async function loadWorkflowsList() {
+    try {
+      const res = await fetch("/superagent/workflows");
+      const data = await res.json();
+      if (!res.ok) return;
+      const wfs = data.workflows || [];
+      let html = `<option value="">📁 Workflow: (Active Canvas)</option>`;
+      for (const w of wfs) {
+        html += `<option value="${w}">${w}</option>`;
+      }
+      wfSel.innerHTML = html;
+    } catch (e) {
+      console.warn("Failed to load workflow list:", e);
+    }
+  }
+
+  wfSel.addEventListener("change", async () => {
+    const chosen = wfSel.value;
+    if (!chosen) return;
+    const ok = await loadWorkflowByName(chosen);
+    if (ok) {
+      add("ca-bot", `⚡ Loaded workflow "${chosen}" onto canvas.`);
+    } else {
+      add("ca-err", `❌ Failed to load workflow "${chosen}".`);
+    }
+  });
+
   async function send() {
     const text = box.value.trim();
     if (!text || busy) return;
@@ -650,14 +690,14 @@ function buildPanel(root, settingsBtn) {
       if (acc) {
         history.push({ role: "assistant", content: acc });
 
-        // Parse Action Tags from assistant response
-        const loadMatch = acc.match(/\[ACTION:LOAD_WORKFLOW\s+name=["'](.*?)["'](?:\s+prompt=["'](.*?)["'])?\]/i);
+        // Parse Action Tags from assistant response - flexible pattern matching
+        const loadMatch = acc.match(/\[ACTION:(?:LOAD_WORKFLOW|SET_WORKFLOW|USE_WORKFLOW)\s+(?:name|template|workflow)=["']?([^"'\s\]]+)["']?(?:\s+prompt=["'](.*?)["'])?\]/i);
         const genMatch = acc.match(/\[ACTION:GENERATE_IMAGE\s+prompt=["'](.*?)["']\]/i);
         const setMatch = acc.match(/\[ACTION:SET_PROMPT(?:\s+positive=["'](.*?)["'])?(?:\s+negative=["'](.*?)["'])?\]/i);
         const runMatch = acc.match(/\[ACTION:RUN_WORKFLOW\]/i);
 
         let cleanText = acc
-          .replace(/\[ACTION:LOAD_WORKFLOW\s+name=["'].*?["'](?:\s+prompt=["'].*?["'])?\]/gi, "")
+          .replace(/\[ACTION:(?:LOAD_WORKFLOW|SET_WORKFLOW|USE_WORKFLOW)\s+(?:name|template|workflow)=["']?.*?["']?(?:\s+prompt=["'].*?["'])?\]/gi, "")
           .replace(/\[ACTION:GENERATE_IMAGE\s+prompt=["'].*?["']\]/gi, "")
           .replace(/\[ACTION:SET_PROMPT(?:\s+positive=["'].*?["'])?(?:\s+negative=["'].*?["'])?\]/gi, "")
           .replace(/\[ACTION:RUN_WORKFLOW\]/gi, "")
@@ -760,6 +800,7 @@ function buildPanel(root, settingsBtn) {
 
   loadSettingsIntoForm();
   loadModels();
+  loadWorkflowsList();
 }
 
 function createUI() {
