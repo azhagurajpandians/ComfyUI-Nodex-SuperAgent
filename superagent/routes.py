@@ -1,6 +1,9 @@
+import base64
 import glob
 import json
+import mimetypes
 import os
+import re
 
 from aiohttp import web
 from server import PromptServer
@@ -20,6 +23,56 @@ _WORKFLOWS_DIR = os.path.join(
 
 def _err(msg, status=500):
     return web.json_response({"error": str(msg)}, status=status)
+
+
+def _find_image_path(name, subfolder=""):
+    if not name:
+        return None
+    try:
+        import folder_paths
+        p = folder_paths.get_annotated_filepath(name)
+        if p and os.path.isfile(p):
+            return p
+    except Exception:
+        pass
+
+    input_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "input"))
+    direct = os.path.join(input_dir, subfolder, name) if subfolder else os.path.join(input_dir, name)
+    if os.path.isfile(direct):
+        return direct
+
+    direct_no_sub = os.path.join(input_dir, name)
+    if os.path.isfile(direct_no_sub):
+        return direct_no_sub
+
+    if os.path.isdir(input_dir):
+        for root, _, files in os.walk(input_dir):
+            if name in files:
+                return os.path.join(root, name)
+    return None
+
+
+def _get_image_base64(filepath):
+    if not filepath or not os.path.isfile(filepath):
+        return None, None
+    mime, _ = mimetypes.guess_type(filepath)
+    if not mime:
+        ext = os.path.splitext(filepath)[1].lower()
+        if ext in (".jpg", ".jpeg"):
+            mime = "image/jpeg"
+        elif ext == ".png":
+            mime = "image/png"
+        elif ext == ".webp":
+            mime = "image/webp"
+        else:
+            mime = "image/png"
+    try:
+        with open(filepath, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("utf-8")
+        return mime, encoded
+    except Exception as e:
+        print(f"[SuperAgent] Error reading image {filepath}: {e}")
+        return None, None
 
 
 def _scan_workflows():
@@ -137,7 +190,53 @@ async def agent_chat(request):
     if workflow_context:
         system_prompt += f"\n\n--- ACTIVE COMFYUI CANVAS WORKFLOW ---\n{workflow_context}\n---------------------------------------"
 
-    messages = [{"role": "system", "content": system_prompt}] + body.get("messages", [])
+    raw_messages = body.get("messages", [])
+    formatted_messages = [{"role": "system", "content": system_prompt}]
+    provider = llm.get_provider(cfg)
+
+    for msg in raw_messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        attachment = msg.get("attachment")
+
+        img_name = None
+        img_subfolder = ""
+        if isinstance(attachment, dict) and attachment.get("name"):
+            img_name = attachment.get("name")
+            img_subfolder = attachment.get("subfolder", "")
+        elif isinstance(content, str):
+            m = re.search(r"\[Attached Image:\s*([^\]]+)\]", content)
+            if m:
+                img_name = m.group(1).strip()
+
+        if role == "user" and img_name:
+            img_path = _find_image_path(img_name, img_subfolder)
+            mime, b64 = _get_image_base64(img_path) if img_path else (None, None)
+            if b64:
+                if provider == "ollama":
+                    formatted_messages.append({
+                        "role": "user",
+                        "content": content,
+                        "images": [b64],
+                    })
+                else:
+                    formatted_messages.append({
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": content},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{mime};base64,{b64}"
+                                }
+                            }
+                        ]
+                    })
+                continue
+
+        formatted_messages.append({"role": role, "content": content})
+
+    messages = formatted_messages
 
     resp = web.StreamResponse(
         headers={"Content-Type": "application/x-ndjson", "Cache-Control": "no-cache"}

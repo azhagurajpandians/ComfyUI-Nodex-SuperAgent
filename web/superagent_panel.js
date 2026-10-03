@@ -953,7 +953,13 @@ function buildPanel(root, settingsBtn) {
 
     let userDisplay = text;
     let userPrompt = text;
+    let attachmentObj = null;
     if (currentAttachment) {
+      attachmentObj = {
+        name: currentAttachment.name,
+        subfolder: currentAttachment.subfolder || "",
+        type: currentAttachment.type || "input",
+      };
       const attachTag = `[Attached Image: ${currentAttachment.name}]`;
       userDisplay = userDisplay ? `${userDisplay}\n📷 ${currentAttachment.name}` : `📷 ${currentAttachment.name}`;
       userPrompt = userPrompt ? `${userPrompt}\n${attachTag}` : attachTag;
@@ -962,7 +968,7 @@ function buildPanel(root, settingsBtn) {
     }
 
     add("ca-user", userDisplay);
-    history.push({ role: "user", content: userPrompt });
+    history.push({ role: "user", content: userPrompt, attachment: attachmentObj });
 
     // Immediate Direct Intent Detection: Resolution Change (with typo tolerance)
     const aspectTokenMatch = text.match(/(16[:/x]9|9[:/x]16|1[:/x]1|4[:/x]3|3[:/x]4|21[:/x]9|landscape|portrait|square|widescreen|ultrawide)/i);
@@ -991,7 +997,11 @@ function buildPanel(root, settingsBtn) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: sel.value,
-          messages: history,
+          messages: history.map((m) => ({
+            role: m.role,
+            content: m.content,
+            attachment: m.attachment || null,
+          })),
           workflow_context: workflowContext,
         }),
       });
@@ -1131,16 +1141,58 @@ function buildPanel(root, settingsBtn) {
           }
         } else if (genMatch) {
           const promptToRun = genMatch[1];
-          const badge = document.createElement("div");
-          badge.className = "ca-action-badge";
-          badge.innerHTML = "⚡ Action: Generate Image";
-          out.prepend(badge);
+          // Check if user's prompt was asking for a prompt or description (NOT asking to generate)
+          const isPromptOnlyRequest = /(?:need|give|write|get|show|create|extract)\s+(?:a\s+)?prompt\b/i.test(text) ||
+                                      /(?:describe|analyze|explain)\s+(?:this|the)?\s*image/i.test(text) ||
+                                      /(?:what\s+is\s+the\s+prompt|prompt\s+for\s+this)/i.test(text);
 
-          const statusEl = document.createElement("div");
-          out.appendChild(statusEl);
-          log.scrollTop = log.scrollHeight;
+          if (isPromptOnlyRequest) {
+            // User requested a prompt, not an immediate image generation!
+            const badge = document.createElement("div");
+            badge.className = "ca-action-badge";
+            badge.innerHTML = "📝 Action: Prompt crafted for image (Click below to apply or generate)";
+            out.prepend(badge);
 
-          await executeGeneration(promptToRun, statusEl);
+            const card = document.createElement("div");
+            card.className = "ca-prompt-action-card";
+            card.style.cssText = "margin-top:8px;padding:8px;background:#242424;border:1px solid #444;border-radius:6px;display:flex;gap:6px;flex-wrap:wrap;";
+
+            const applyBtn = document.createElement("button");
+            applyBtn.className = "ca-option-chip";
+            applyBtn.textContent = "✅ Set as Canvas Prompt";
+            applyBtn.onclick = () => {
+              const { positiveNode } = findPromptNodes();
+              if (positiveNode) {
+                setNodePromptText(positiveNode, promptToRun);
+                add("ca-bot", "✅ Prompt applied to canvas positive prompt node.");
+              }
+            };
+
+            const runBtn = document.createElement("button");
+            runBtn.className = "ca-option-chip";
+            runBtn.textContent = "⚡ Generate Image Now";
+            runBtn.onclick = async () => {
+              const statusEl = document.createElement("div");
+              out.appendChild(statusEl);
+              log.scrollTop = log.scrollHeight;
+              await executeGeneration(promptToRun, statusEl);
+            };
+
+            card.appendChild(applyBtn);
+            card.appendChild(runBtn);
+            out.appendChild(card);
+          } else {
+            const badge = document.createElement("div");
+            badge.className = "ca-action-badge";
+            badge.innerHTML = "⚡ Action: Generate Image";
+            out.prepend(badge);
+
+            const statusEl = document.createElement("div");
+            out.appendChild(statusEl);
+            log.scrollTop = log.scrollHeight;
+
+            await executeGeneration(promptToRun, statusEl);
+          }
         } else if (setMatch) {
           const pos = setMatch[1], neg = setMatch[2];
           const { positiveNode, negativeNode } = findPromptNodes();
