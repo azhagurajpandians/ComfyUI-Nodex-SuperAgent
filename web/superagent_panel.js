@@ -189,32 +189,142 @@ function setNodePromptText(node, text) {
   return false;
 }
 
+// Helper: Locate latent or resolution node on canvas
+function findLatentOrResolutionNode() {
+  const nodes = app.graph?._nodes || [];
+  return nodes.find(
+    (n) =>
+      n.type === "EmptySD3LatentImage" ||
+      n.type === "EmptyLatentImage" ||
+      n.type === "EmptyLatentImagePresets" ||
+      n.type === "ResolutionSelector" ||
+      (n.widgets && n.widgets.some((w) => w.name === "width") && n.widgets.some((w) => w.name === "height"))
+  );
+}
+
+// Helper: Set resolution (width & height) on active canvas latent node
+function setCanvasResolution(width, height) {
+  const node = findLatentOrResolutionNode();
+  if (!node) return { success: false, error: "No latent resolution node found on canvas" };
+
+  const wVal = parseInt(width, 10);
+  const hVal = parseInt(height, 10);
+  let updatedW = false;
+  let updatedH = false;
+
+  for (const w of node.widgets || []) {
+    if (w.name === "width") {
+      w.value = wVal;
+      if (w.callback) w.callback(wVal);
+      updatedW = true;
+    }
+    if (w.name === "height") {
+      w.value = hVal;
+      if (w.callback) w.callback(hVal);
+      updatedH = true;
+    }
+  }
+
+  // Fallback to widget index if names not found
+  if (!updatedW && node.widgets && node.widgets[0]) {
+    node.widgets[0].value = wVal;
+    if (node.widgets[0].callback) node.widgets[0].callback(wVal);
+    updatedW = true;
+  }
+  if (!updatedH && node.widgets && node.widgets[1]) {
+    node.widgets[1].value = hVal;
+    if (node.widgets[1].callback) node.widgets[1].callback(hVal);
+    updatedH = true;
+  }
+
+  node.setDirtyCanvas?.(true, true);
+  app.graph?.setDirtyCanvas(true, true);
+  return { success: true, nodeTitle: node.title || node.type, width: wVal, height: hVal };
+}
+
+// Helper: Set KSampler settings on active canvas
+function setCanvasSampler(settings) {
+  const nodes = app.graph?._nodes || [];
+  const ksampler = nodes.find((n) => n.type === "KSampler" || n.type === "KSamplerAdvanced");
+  if (!ksampler) return { success: false, error: "No KSampler node found on canvas" };
+
+  for (const w of ksampler.widgets || []) {
+    if (settings.steps != null && w.name === "steps") {
+      w.value = parseInt(settings.steps, 10);
+      if (w.callback) w.callback(w.value);
+    }
+    if (settings.cfg != null && w.name === "cfg") {
+      w.value = parseFloat(settings.cfg);
+      if (w.callback) w.callback(w.value);
+    }
+    if (settings.denoise != null && w.name === "denoise") {
+      w.value = parseFloat(settings.denoise);
+      if (w.callback) w.callback(w.value);
+    }
+    if (settings.sampler_name && w.name === "sampler_name") {
+      w.value = settings.sampler_name;
+      if (w.callback) w.callback(w.value);
+    }
+    if (settings.scheduler && w.name === "scheduler") {
+      w.value = settings.scheduler;
+      if (w.callback) w.callback(w.value);
+    }
+  }
+
+  ksampler.setDirtyCanvas?.(true, true);
+  app.graph?.setDirtyCanvas(true, true);
+  return { success: true, nodeTitle: ksampler.title || ksampler.type };
+}
+
 // Helper: Serialize current canvas workflow status for the LLM
 function getWorkflowContext() {
   if (!app.graph || !app.graph._nodes || app.graph._nodes.length === 0) {
     return "Status: Canvas is empty (no active nodes).";
   }
   const nodes = app.graph._nodes;
-  const ckpt = nodes.find((n) => n.type === "CheckpointLoaderSimple" || n.type === "CheckpointLoader");
-  const ckptName = ckpt?.widgets?.find((w) => w.name === "ckpt_name")?.value || "Active Checkpoint";
 
+  // Model checkpoint or UNET
+  const ckpt = nodes.find((n) => n.type === "CheckpointLoaderSimple" || n.type === "CheckpointLoader");
+  const unet = nodes.find((n) => n.type === "UNETLoader");
+  const modelName =
+    ckpt?.widgets?.find((w) => w.name === "ckpt_name")?.value ||
+    unet?.widgets?.find((w) => w.name === "unet_name")?.value ||
+    "Active Model";
+
+  // Prompt nodes
   const { positiveNode, negativeNode } = findPromptNodes();
   const posVal = positiveNode?.widgets?.find((w) => w.name === "text")?.value || positiveNode?.widgets?.[0]?.value || "(empty)";
   const negVal = negativeNode?.widgets?.find((w) => w.name === "text")?.value || negativeNode?.widgets?.[0]?.value || "(empty)";
 
+  // Resolution
+  const latentNode = findLatentOrResolutionNode();
+  let width = latentNode?.widgets?.find((w) => w.name === "width")?.value;
+  let height = latentNode?.widgets?.find((w) => w.name === "height")?.value;
+  if (width == null && latentNode?.widgets?.[0]) width = latentNode.widgets[0].value;
+  if (height == null && latentNode?.widgets?.[1]) height = latentNode.widgets[1].value;
+  const resStr = latentNode ? `${width}x${height} (Node #${latentNode.id}: ${latentNode.title || latentNode.type})` : "Default (Image/VAE)";
+
+  // Active Input Image
+  const imgNode = nodes.find((n) => n.type === "LoadImage");
+  const imgVal = imgNode?.widgets?.find((w) => w.name === "image")?.value;
+
+  // Sampler
   const ksampler = nodes.find((n) => n.type === "KSampler" || n.type === "KSamplerAdvanced");
   const steps = ksampler?.widgets?.find((w) => w.name === "steps")?.value || 20;
   const samplerName = ksampler?.widgets?.find((w) => w.name === "sampler_name")?.value || "euler";
   const cfg = ksampler?.widgets?.find((w) => w.name === "cfg")?.value || 7.0;
+  const denoise = ksampler?.widgets?.find((w) => w.name === "denoise")?.value ?? 1.0;
 
   const nodeTypes = Array.from(new Set(nodes.map((n) => n.type))).join(", ");
 
   return `Current Canvas Workflow Status:
-- Model Checkpoint: ${ckptName}
+- Active Model: ${modelName}
+- Current Resolution: ${resStr}
+- Active Input Image: ${imgVal ? `"${imgVal}" (LoadImage Node #${imgNode.id})` : "None (Text-to-Image)"}
+- Sampler Settings: ${samplerName} | Steps: ${steps} | CFG: ${cfg} | Denoise: ${denoise}
 - Positive Prompt (Node ${positiveNode ? positiveNode.id : "?"}): "${posVal}"
 - Negative Prompt (Node ${negativeNode ? negativeNode.id : "?"}): "${negVal}"
-- Sampler Settings: ${samplerName} | Steps: ${steps} | CFG: ${cfg}
-- Nodes present: ${nodeTypes}
+- Nodes Present: ${nodeTypes}
 - Total Active Nodes: ${nodes.length}`;
 }
 
@@ -819,6 +929,8 @@ function buildPanel(root, settingsBtn) {
         history.push({ role: "assistant", content: acc });
 
         // Parse Action Tags from assistant response - flexible pattern matching
+        const resMatch = acc.match(/\[ACTION:SET_RESOLUTION(?:\s+width=["']?(\d+)["']?)?(?:\s+height=["']?(\d+)["']?)?(?:\s+aspect_ratio=["']?([^"'\s\]]+)["']?)?\]/i);
+        const samplerMatch = acc.match(/\[ACTION:SET_SAMPLER(?:\s+steps=["']?(\d+)["']?)?(?:\s+cfg=["']?([\d\.]+)["']?)?(?:\s+denoise=["']?([\d\.]+)["']?)?(?:\s+sampler=["']?([^"'\s\]]+)["']?)?(?:\s+scheduler=["']?([^"'\s\]]+)["']?)?\]/i);
         const loadMatch = acc.match(/\[ACTION:(?:LOAD_WORKFLOW|SET_WORKFLOW|USE_WORKFLOW)\s+(?:name|template|workflow)=["']?([^"'\s\]]+)["']?(?:\s+prompt=["'](.*?)["'])?\]/i);
         const genMatch = acc.match(/\[ACTION:GENERATE_IMAGE\s+prompt=["'](.*?)["']\]/i);
         const setMatch = acc.match(/\[ACTION:SET_PROMPT(?:\s+positive=["'](.*?)["'])?(?:\s+negative=["'](.*?)["'])?\]/i);
@@ -836,6 +948,8 @@ function buildPanel(root, settingsBtn) {
         }
 
         let cleanText = acc
+          .replace(/\[ACTION:SET_RESOLUTION(?:\s+width=["']?\d+["']?)?(?:\s+height=["']?\d+["']?)?(?:\s+aspect_ratio=["']?[^"'\s\]]+["']?)?\]/gi, "")
+          .replace(/\[ACTION:SET_SAMPLER(?:\s+steps=["']?\d+["']?)?(?:\s+cfg=["']?[\d\.]+["']?)?(?:\s+denoise=["']?[\d\.]+["']?)?(?:\s+sampler=["']?[^"'\s\]]+["']?)?(?:\s+scheduler=["']?[^"'\s\]]+["']?)?\]/gi, "")
           .replace(/\[ACTION:(?:LOAD_WORKFLOW|SET_WORKFLOW|USE_WORKFLOW)\s+(?:name|template|workflow)=["']?.*?["']?(?:\s+prompt=["'].*?["'])?\]/gi, "")
           .replace(/\[ACTION:GENERATE_IMAGE\s+prompt=["'].*?["']\]/gi, "")
           .replace(/\[ACTION:SET_PROMPT(?:\s+positive=["'].*?["'])?(?:\s+negative=["'].*?["'])?\]/gi, "")
@@ -864,6 +978,51 @@ function buildPanel(root, settingsBtn) {
             chipWrap.appendChild(btn);
           }
           out.appendChild(chipWrap);
+        }
+
+        // 1. Apply Resolution Change if requested
+        if (resMatch) {
+          let reqW = resMatch[1];
+          let reqH = resMatch[2];
+          const reqAspect = (resMatch[3] || "").toLowerCase();
+          if ((!reqW || !reqH) && reqAspect) {
+            if (reqAspect.includes("16:9") || reqAspect.includes("landscape")) {
+              reqW = 1024; reqH = 576;
+            } else if (reqAspect.includes("9:16") || reqAspect.includes("portrait")) {
+              reqW = 576; reqH = 1024;
+            } else if (reqAspect.includes("1:1") || reqAspect.includes("square")) {
+              reqW = 1024; reqH = 1024;
+            } else if (reqAspect.includes("4:3")) {
+              reqW = 1024; reqH = 768;
+            } else if (reqAspect.includes("3:4")) {
+              reqW = 768; reqH = 1024;
+            } else if (reqAspect.includes("21:9")) {
+              reqW = 1344; reqH = 576;
+            }
+          }
+          if (reqW && reqH) {
+            const resResult = setCanvasResolution(reqW, reqH);
+            const badge = document.createElement("div");
+            badge.className = "ca-action-badge";
+            badge.innerHTML = resResult.success
+              ? `📐 Action: Resolution set to ${reqW}x${reqH} (${reqAspect || "custom"}) on ${resResult.nodeTitle}`
+              : `⚠️ Action: Resolution change failed: ${resResult.error}`;
+            out.prepend(badge);
+          }
+        }
+
+        // 2. Apply Sampler Change if requested
+        if (samplerMatch) {
+          const sSteps = samplerMatch[1];
+          const sCfg = samplerMatch[2];
+          const sDenoise = samplerMatch[3];
+          const sSampler = samplerMatch[4];
+          const sScheduler = samplerMatch[5];
+          setCanvasSampler({ steps: sSteps, cfg: sCfg, denoise: sDenoise, sampler_name: sSampler, scheduler: sScheduler });
+          const badge = document.createElement("div");
+          badge.className = "ca-action-badge";
+          badge.innerHTML = `⚙ Action: Sampler updated (steps: ${sSteps || "-"}, cfg: ${sCfg || "-"}, denoise: ${sDenoise || "-"})`;
+          out.prepend(badge);
         }
 
         if (loadMatch) {
