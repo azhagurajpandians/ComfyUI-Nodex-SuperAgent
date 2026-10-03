@@ -62,7 +62,10 @@ async def agent_chat(request):
     cfg = config.load()
     body = await request.json()
     model = body.get("model") or cfg.get("default_model")
-    system_prompt = cfg.get("system_prompt", "You are Nodex SuperAgent, an agent inside ComfyUI. Be terse and direct. Plain text only.")
+    system_prompt = cfg.get("system_prompt", config.AGENT_SYSTEM_PROMPT)
+    workflow_context = body.get("workflow_context")
+    if workflow_context:
+        system_prompt += f"\n\n--- ACTIVE COMFYUI CANVAS WORKFLOW ---\n{workflow_context}\n---------------------------------------"
     messages = [{"role": "system", "content": system_prompt}] + body.get("messages", [])
 
     resp = web.StreamResponse(

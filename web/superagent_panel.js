@@ -1,4 +1,5 @@
 import { app } from "../../scripts/app.js";
+import { api } from "../../scripts/api.js";
 
 const STORE = "nodex_superagent_ui";
 const DOCK_LEFT = 56; // px: clears ComfyUI's left sidebar icon bar
@@ -16,7 +17,7 @@ const PROVIDER_INFO = {
     name: "NVIDIA NIM (Cloud API)",
     default_url: "https://integrate.api.nvidia.com/v1",
     default_model: "meta/llama-3.3-70b-instruct",
-    hint: "NVIDIA NIM Cloud. Zero VRAM impact on ComfyUI! Get free API key from build.nvidia.com.",
+    hint: "NVIDIA NIM Cloud. Zero VRAM impact on ComfyUI! Free API key from build.nvidia.com.",
     key_placeholder: "nvapi-...",
   },
   openai: {
@@ -45,17 +46,17 @@ const PROVIDER_INFO = {
 const css = `
 .sa-launcher{position:fixed;right:20px;bottom:20px;z-index:9998;width:48px;height:48px;border-radius:50%;
   border:1px solid #666;background:#2a2a2a;color:#ffd34d;font-size:22px;cursor:pointer;
-  box-shadow:0 4px 14px rgba(0,0,0,.5)}
-.sa-launcher:hover{background:#383838}
+  box-shadow:0 4px 14px rgba(0,0,0,.5);transition:transform 0.15s ease}
+.sa-launcher:hover{background:#383838;transform:scale(1.06)}
 .sa-launcher.sa-on{background:#ffd34d;color:#222}
 .sa-win{position:fixed;z-index:9999;display:none;flex-direction:column;background:var(--comfy-menu-bg,#202020);
   color:var(--fg-color,#ddd);border:1px solid #555;border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,.55);
-  overflow:hidden;min-width:320px;min-height:280px;resize:both;font-size:13px}
+  overflow:hidden;min-width:320px;min-height:300px;resize:both;font-size:13px}
 .sa-win.sa-docked{resize:none;border-radius:0;border-width:0 1px 0 0}
 .sa-head{display:flex;align-items:center;gap:6px;padding:6px 8px;background:#2c2c2c;border-bottom:1px solid #444;
   cursor:move;user-select:none}
 .sa-win.sa-docked .sa-head{cursor:default}
-.sa-title{font-weight:600}
+.sa-title{font-weight:600;display:flex;align-items:center;gap:4px}
 .sa-spacer{flex:1}
 .sa-head button{background:none;border:none;color:inherit;cursor:pointer;font-size:14px;padding:2px 6px}
 .sa-head button:hover{background:#444;border-radius:4px}
@@ -73,15 +74,30 @@ const css = `
 .ca-bar button{background:#333;border:1px solid #555;color:#eee;border-radius:4px;padding:3px 8px;cursor:pointer}
 .ca-bar button:hover{background:#444}
 .ca-log{flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:8px}
-.ca-msg{white-space:pre-wrap;word-break:break-word;padding:6px 8px;border-radius:6px;line-height:1.4}
+.ca-msg{white-space:pre-wrap;word-break:break-word;padding:8px 10px;border-radius:6px;line-height:1.4}
 .ca-user{background:#2b3a4a;align-self:flex-end;max-width:90%}
 .ca-bot{background:#2a2a2a;align-self:flex-start;max-width:92%}
-.ca-err{background:#4a2b2b;color:#ffb3b3}
-.ca-think{font-size:11px;color:#888;border-left:2px solid #555;padding-left:6px;margin-bottom:4px;white-space:pre-wrap}
+.ca-err{background:#4a2b2b;color:#ffb3b3;border-left:3px solid #f85149}
+.ca-think{font-size:11px;color:#888;border-left:2px solid #555;padding-left:6px;margin-bottom:6px;white-space:pre-wrap}
 .ca-in{display:flex;gap:6px;padding:6px;border-top:1px solid #444}
-.ca-in textarea{flex:1;resize:none;height:56px;background:#181818;color:#eee;border:1px solid #444;border-radius:4px;padding:5px}
+.ca-in textarea{flex:1;resize:none;height:56px;background:#181818;color:#eee;border:1px solid #444;border-radius:4px;padding:6px}
 .ca-send{background:#ffd34d;border:none;border-radius:4px;color:#222;font-weight:600;padding:0 12px;cursor:pointer}
 .ca-send:hover{background:#ffe066}
+
+/* Action & Status Cards */
+.ca-action-badge{display:inline-flex;align-items:center;gap:4px;background:#ffd34d22;color:#ffd34d;
+  border:1px solid #ffd34d55;border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;margin-bottom:6px}
+.ca-status-bar{display:flex;align-items:center;gap:8px;background:#182838;color:#79c0ff;
+  border:1px solid #388bfd44;padding:8px 10px;border-radius:6px;font-size:12px;margin-top:6px}
+.ca-spinner{animation:sa-spin 1.5s linear infinite;display:inline-block}
+@keyframes sa-spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
+.ca-img-gallery{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+.ca-img-card{border-radius:6px;overflow:hidden;border:1px solid #444;background:#161616}
+.ca-output-img{width:100%;max-height:360px;object-fit:contain;display:block;cursor:pointer;background:#111;transition:opacity 0.15s ease}
+.ca-output-img:hover{opacity:0.92}
+.ca-img-meta{display:flex;justify-content:space-between;align-items:center;padding:4px 8px;font-size:11px;color:#aaa;background:#222}
+.ca-img-btn{background:#333;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 7px;font-size:11px;cursor:pointer}
+.ca-img-btn:hover{background:#444}
 
 /* Settings view */
 .sa-settings-wrap{display:none;flex-direction:column;height:100%;background:var(--comfy-menu-bg,#202020);color:var(--fg-color,#ddd)}
@@ -103,11 +119,203 @@ const css = `
 `;
 
 const ui = Object.assign(
-  { mode: "float", open: false, x: null, y: null, w: 430, h: 570, dockW: 380 },
+  { mode: "float", open: false, x: null, y: null, w: 440, h: 580, dockW: 400 },
   (() => { try { return JSON.parse(localStorage.getItem(STORE)) || {}; } catch { return {}; } })()
 );
 const save = () => { try { localStorage.setItem(STORE, JSON.stringify(ui)); } catch {} };
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+// Helper: Locate positive and negative prompt nodes in the current ComfyUI workflow
+function findPromptNodes() {
+  let positiveNode = null;
+  let negativeNode = null;
+  const nodes = app.graph?._nodes || [];
+
+  // 1. Try tracing backward from KSampler inputs
+  const ksamplers = nodes.filter((n) => n.type === "KSampler" || n.type === "KSamplerAdvanced");
+  for (const k of ksamplers) {
+    if (k.inputs) {
+      if (k.inputs[1] && k.inputs[1].link != null) {
+        const link = app.graph.links?.[k.inputs[1].link];
+        if (link) positiveNode = app.graph.getNodeById(link.origin_id);
+      }
+      if (k.inputs[2] && k.inputs[2].link != null) {
+        const link = app.graph.links?.[k.inputs[2].link];
+        if (link) negativeNode = app.graph.getNodeById(link.origin_id);
+      }
+    }
+  }
+
+  // 2. Fallback: Search by node title or type
+  if (!positiveNode) {
+    positiveNode = nodes.find(
+      (n) => (n.title && n.title.toLowerCase().includes("positive")) || n.type === "CLIPTextEncode"
+    );
+  }
+  if (!negativeNode) {
+    negativeNode = nodes.find(
+      (n) => n !== positiveNode && ((n.title && n.title.toLowerCase().includes("negative")) || n.type === "CLIPTextEncode")
+    );
+  }
+
+  return { positiveNode, negativeNode };
+}
+
+// Helper: Update text inside a prompt node
+function setNodePromptText(node, text) {
+  if (!node || !text) return false;
+  const w = (node.widgets || []).find((w) => w.name === "text") || node.widgets?.[0];
+  if (w) {
+    w.value = text;
+    if (w.callback) w.callback(text);
+    node.setDirtyCanvas?.(true, true);
+    app.graph?.setDirtyCanvas(true, true);
+    return true;
+  }
+  return false;
+}
+
+// Helper: Serialize current canvas workflow status for the LLM
+function getWorkflowContext() {
+  if (!app.graph || !app.graph._nodes || app.graph._nodes.length === 0) {
+    return "Status: Canvas is empty (no active nodes).";
+  }
+  const nodes = app.graph._nodes;
+  const ckpt = nodes.find((n) => n.type === "CheckpointLoaderSimple" || n.type === "CheckpointLoader");
+  const ckptName = ckpt?.widgets?.find((w) => w.name === "ckpt_name")?.value || "Active Checkpoint";
+
+  const { positiveNode, negativeNode } = findPromptNodes();
+  const posVal = positiveNode?.widgets?.find((w) => w.name === "text")?.value || positiveNode?.widgets?.[0]?.value || "(empty)";
+  const negVal = negativeNode?.widgets?.find((w) => w.name === "text")?.value || negativeNode?.widgets?.[0]?.value || "(empty)";
+
+  const ksampler = nodes.find((n) => n.type === "KSampler" || n.type === "KSamplerAdvanced");
+  const steps = ksampler?.widgets?.find((w) => w.name === "steps")?.value || 20;
+  const samplerName = ksampler?.widgets?.find((w) => w.name === "sampler_name")?.value || "euler";
+  const cfg = ksampler?.widgets?.find((w) => w.name === "cfg")?.value || 7.0;
+
+  const nodeTypes = Array.from(new Set(nodes.map((n) => n.type))).join(", ");
+
+  return `Current Canvas Workflow Status:
+- Model Checkpoint: ${ckptName}
+- Positive Prompt (Node ${positiveNode ? positiveNode.id : "?"}): "${posVal}"
+- Negative Prompt (Node ${negativeNode ? negativeNode.id : "?"}): "${negVal}"
+- Sampler Settings: ${samplerName} | Steps: ${steps} | CFG: ${cfg}
+- Nodes present: ${nodeTypes}
+- Total Active Nodes: ${nodes.length}`;
+}
+
+// Helper: Render generated images directly inside the chat log
+function renderGeneratedImages(images, targetEl) {
+  if (!targetEl || !images || images.length === 0) return;
+  const container = document.createElement("div");
+  container.className = "ca-img-gallery";
+  for (const img of images) {
+    const url = `/view?filename=${encodeURIComponent(img.filename)}&subfolder=${encodeURIComponent(img.subfolder || "")}&type=${encodeURIComponent(img.type || "output")}`;
+    const imgWrapper = document.createElement("div");
+    imgWrapper.className = "ca-img-card";
+    imgWrapper.innerHTML = `
+      <a href="${url}" target="_blank" title="Click to view full size in new tab">
+        <img src="${url}" alt="Generated image" class="ca-output-img" />
+      </a>
+      <div class="ca-img-meta">
+        <span>${img.filename}</span>
+        <button class="ca-img-btn" title="Open full resolution">Open</button>
+      </div>`;
+    imgWrapper.querySelector(".ca-img-btn").onclick = (e) => {
+      e.preventDefault();
+      window.open(url, "_blank");
+    };
+    container.appendChild(imgWrapper);
+  }
+  targetEl.innerHTML = "";
+  targetEl.appendChild(container);
+  targetEl.scrollIntoView({ behavior: "smooth" });
+}
+
+// Helper: Run ComfyUI generation and track real-time progress & outputs
+function executeGeneration(promptText, statusEl) {
+  const { positiveNode } = findPromptNodes();
+  if (positiveNode && promptText) {
+    setNodePromptText(positiveNode, promptText);
+  }
+
+  if (statusEl) {
+    statusEl.innerHTML = `<div class="ca-status-bar"><span class="ca-spinner">⚡</span> Queuing generation in ComfyUI...</div>`;
+  }
+
+  return new Promise((resolve) => {
+    let imagesFound = [];
+
+    const onProgress = (e) => {
+      const { value, max } = e.detail || {};
+      if (statusEl && max) {
+        const pct = Math.round((value / max) * 100);
+        statusEl.innerHTML = `<div class="ca-status-bar"><span class="ca-spinner">⚙</span> Sampling step ${value}/${max} (${pct}%)</div>`;
+      }
+    };
+
+    const onExecuted = (e) => {
+      const output = e.detail?.output;
+      if (output && output.images && output.images.length > 0) {
+        imagesFound = imagesFound.concat(output.images);
+      }
+    };
+
+    const onExecutionStart = () => {
+      if (statusEl) {
+        statusEl.innerHTML = `<div class="ca-status-bar"><span class="ca-spinner">⚙</span> Executing workflow on GPU...</div>`;
+      }
+    };
+
+    const onError = (e) => {
+      cleanup();
+      if (statusEl) {
+        statusEl.innerHTML = `<div class="ca-err">Generation error: ${e.detail?.message || "Execution failed"}</div>`;
+      }
+      resolve(null);
+    };
+
+    const onStatus = (e) => {
+      const remaining = e.detail?.status?.exec_info?.queue_remaining;
+      if (remaining === 0 && imagesFound.length > 0) {
+        cleanup();
+        renderGeneratedImages(imagesFound, statusEl);
+        resolve(imagesFound);
+      }
+    };
+
+    const cleanup = () => {
+      api.removeEventListener("progress", onProgress);
+      api.removeEventListener("executed", onExecuted);
+      api.removeEventListener("execution_start", onExecutionStart);
+      api.removeEventListener("execution_error", onError);
+      api.removeEventListener("status", onStatus);
+    };
+
+    api.addEventListener("progress", onProgress);
+    api.addEventListener("executed", onExecuted);
+    api.addEventListener("execution_start", onExecutionStart);
+    api.addEventListener("execution_error", onError);
+    api.addEventListener("status", onStatus);
+
+    try {
+      app.queuePrompt(0, 1);
+    } catch (err) {
+      cleanup();
+      if (statusEl) statusEl.innerHTML = `<div class="ca-err">Failed to queue: ${err.message}</div>`;
+      resolve(null);
+    }
+
+    // Safety fallback: if status event didn't trigger completion
+    setTimeout(() => {
+      if (imagesFound.length > 0) {
+        cleanup();
+        renderGeneratedImages(imagesFound, statusEl);
+        resolve(imagesFound);
+      }
+    }, 180000);
+  });
+}
 
 function buildPanel(root, settingsBtn) {
   root.insertAdjacentHTML("beforeend", `
@@ -120,7 +328,7 @@ function buildPanel(root, settingsBtn) {
       </div>
       <div class="ca-log"></div>
       <div class="ca-in">
-        <textarea class="ca-text" placeholder="Message (Enter = send, Shift+Enter = newline)"></textarea>
+        <textarea class="ca-text" placeholder="Message or ask to generate an image... (Enter = send, Shift+Enter = newline)"></textarea>
         <button class="ca-send">Send</button>
       </div>
     </div>
@@ -155,7 +363,7 @@ function buildPanel(root, settingsBtn) {
         <div class="sa-cfg-row-two">
           <div class="sa-cfg-group">
             <label>Temperature</label>
-            <input type="number" step="0.1" min="0" max="2" class="sa-cfg-temp" value="0.3">
+            <input type="number" step="0.1" min="0" max="2" class="sa-cfg-temp" value="0.4">
           </div>
           <div class="sa-cfg-group">
             <label>Max Context</label>
@@ -164,7 +372,7 @@ function buildPanel(root, settingsBtn) {
         </div>
         <div class="sa-cfg-group">
           <label>System Prompt</label>
-          <textarea class="sa-cfg-prompt" rows="2"></textarea>
+          <textarea class="sa-cfg-prompt" rows="3"></textarea>
         </div>
       </div>
       <div class="sa-cfg-footer">
@@ -228,7 +436,7 @@ function buildPanel(root, settingsBtn) {
       cfgKey.value = activeConfig.api_key || "";
       cfgUrl.value = activeConfig.base_url || activeConfig.ollama_host || (PROVIDER_INFO[p] && PROVIDER_INFO[p].default_url) || "";
       cfgModel.value = activeConfig.default_model || "";
-      cfgTemp.value = activeConfig.temperature != null ? activeConfig.temperature : 0.3;
+      cfgTemp.value = activeConfig.temperature != null ? activeConfig.temperature : 0.4;
       cfgCtx.value = activeConfig.num_ctx || 8192;
       cfgPrompt.value = activeConfig.system_prompt || "";
       updateHint(p);
@@ -256,7 +464,7 @@ function buildPanel(root, settingsBtn) {
         base_url: cfgUrl.value.trim(),
         ollama_host: p === "ollama" ? cfgUrl.value.trim() : (activeConfig.ollama_host || "http://127.0.0.1:11434"),
         default_model: cfgModel.value.trim(),
-        temperature: parseFloat(cfgTemp.value) || 0.3,
+        temperature: parseFloat(cfgTemp.value) || 0.4,
         num_ctx: parseInt(cfgCtx.value, 10) || 8192,
         system_prompt: cfgPrompt.value.trim(),
       };
@@ -320,7 +528,6 @@ function buildPanel(root, settingsBtn) {
         opt.textContent = trimmed;
         opt.selected = true;
         sel.insertBefore(opt, sel.lastElementChild);
-        // Persist default model
         await fetch("/superagent/config", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -342,11 +549,18 @@ function buildPanel(root, settingsBtn) {
     let acc = "";
     let thinkAcc = "";
 
+    // Extract live canvas workflow context
+    const workflowContext = getWorkflowContext();
+
     try {
       const res = await fetch("/superagent/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: sel.value, messages: history }),
+        body: JSON.stringify({
+          model: sel.value,
+          messages: history,
+          workflow_context: workflowContext,
+        }),
       });
       const reader = res.body.getReader();
       const dec = new TextDecoder();
@@ -376,9 +590,62 @@ function buildPanel(root, settingsBtn) {
           }
         }
       }
+
       if (acc) {
-        out.textContent = acc;
         history.push({ role: "assistant", content: acc });
+
+        // Parse Action Tags from assistant response
+        const genMatch = acc.match(/\[ACTION:GENERATE_IMAGE\s+prompt=["'](.*?)["']\]/i);
+        const setMatch = acc.match(/\[ACTION:SET_PROMPT(?:\s+positive=["'](.*?)["'])?(?:\s+negative=["'](.*?)["'])?\]/i);
+        const runMatch = acc.match(/\[ACTION:RUN_WORKFLOW\]/i);
+
+        let cleanText = acc
+          .replace(/\[ACTION:GENERATE_IMAGE\s+prompt=["'].*?["']\]/gi, "")
+          .replace(/\[ACTION:SET_PROMPT(?:\s+positive=["'].*?["'])?(?:\s+negative=["'].*?["'])?\]/gi, "")
+          .replace(/\[ACTION:RUN_WORKFLOW\]/gi, "")
+          .trim();
+
+        out.innerHTML = "";
+        if (cleanText) {
+          const textNode = document.createElement("div");
+          textNode.textContent = cleanText;
+          out.appendChild(textNode);
+        }
+
+        if (genMatch) {
+          const promptToRun = genMatch[1];
+          const badge = document.createElement("div");
+          badge.className = "ca-action-badge";
+          badge.innerHTML = "⚡ Action: Generate Image";
+          out.prepend(badge);
+
+          const statusEl = document.createElement("div");
+          out.appendChild(statusEl);
+          log.scrollTop = log.scrollHeight;
+
+          await executeGeneration(promptToRun, statusEl);
+        } else if (setMatch) {
+          const pos = setMatch[1], neg = setMatch[2];
+          const { positiveNode, negativeNode } = findPromptNodes();
+          if (pos && positiveNode) setNodePromptText(positiveNode, pos);
+          if (neg && negativeNode) setNodePromptText(negativeNode, neg);
+
+          const badge = document.createElement("div");
+          badge.className = "ca-action-badge";
+          badge.innerHTML = "✅ Action: Prompts Updated on Canvas";
+          out.prepend(badge);
+        } else if (runMatch) {
+          const badge = document.createElement("div");
+          badge.className = "ca-action-badge";
+          badge.innerHTML = "⚡ Action: Running Canvas Workflow";
+          out.prepend(badge);
+
+          const statusEl = document.createElement("div");
+          out.appendChild(statusEl);
+          log.scrollTop = log.scrollHeight;
+
+          await executeGeneration(null, statusEl);
+        }
       }
     } catch (e) {
       out.classList.add("ca-err");
@@ -388,8 +655,8 @@ function buildPanel(root, settingsBtn) {
   }
 
   sendBtn.onclick = send;
-  for (const ev of ["keydown", "keyup", "keypress"]) box.addEventListener(ev, (e) => e.stopPropagation());
   for (const ev of ["keydown", "keyup", "keypress"]) {
+    box.addEventListener(ev, (e) => e.stopPropagation());
     settingsView.addEventListener(ev, (e) => e.stopPropagation());
   }
 
@@ -458,7 +725,7 @@ function createUI() {
       });
     } else {
       ui.w = clamp(ui.w, 320, innerWidth - 16);
-      ui.h = clamp(ui.h, 280, innerHeight - 16);
+      ui.h = clamp(ui.h, 300, innerHeight - 16);
       if (ui.x == null) ui.x = innerWidth - ui.w - 24;
       if (ui.y == null) ui.y = innerHeight - ui.h - 84;
       ui.x = clamp(ui.x, 0, innerWidth - 80);
@@ -496,7 +763,7 @@ function createUI() {
     grip.addEventListener("pointerup", up);
   });
 
-  // native corner-resize (float mode) -> remember size
+  // native corner-resize (float mode)
   let t;
   new ResizeObserver(() => {
     if (!ui.open || ui.mode !== "float") return;
