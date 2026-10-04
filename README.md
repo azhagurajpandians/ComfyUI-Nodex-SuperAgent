@@ -1,6 +1,6 @@
 # ComfyUI-Nodex-SuperAgent
 
-Nodex SuperAgent: an AI assistant inside ComfyUI, supporting local models (Ollama) and cloud APIs (NVIDIA NIM, Google Gemini, OpenAI). Floating chat window (or dock it to the left) with streaming responses.
+Nodex SuperAgent: an AI assistant inside ComfyUI, supporting local models (Ollama) and cloud APIs (NVIDIA NIM, Google Gemini, OpenAI). Floating chat window (or dock it to either side) with streaming responses.
 
 **Status:** Workflow orchestrator prototype. It plans a single generation run, routes to a declared skill, loads the selected ComfyUI visual graph onto the canvas, fills mapped inputs, queues it, and returns image/video outputs. Multi-step production pipelines remain future work.
 
@@ -101,6 +101,7 @@ You can configure settings directly inside ComfyUI by clicking the **⚙** butto
 | GET | `/superagent/models` | List available models for the active provider |
 | GET | `/superagent/workflows` | List bundled/saved visual graphs and registered skills |
 | POST | `/superagent/plan` | Build a deterministic skill/workflow route from a user request |
+| POST | `/superagent/enhance_prompt` | Expand a request into a workflow-ready visual prompt when the chat model omits one |
 | POST | `/superagent/preflight` | Check machine/workflow readiness and return mode/resolution advice before queueing |
 | GET | `/superagent/workflow?id=...` | Return an exact cataloged GUI workflow graph for canvas loading |
 | POST | `/superagent/chat` | Stream chat. Body: `{model, messages, workflow_context}`. NDJSON response; API keys are never returned by config reads |
@@ -111,7 +112,8 @@ You can configure settings directly inside ComfyUI by clicking the **⚙** butto
 - **⚡ launcher** (bottom-right): open or close the chat window
 - **⚙ Settings** (header): configure provider (Ollama, NVIDIA NIM, Gemini, OpenAI, Custom), API keys, endpoints, and parameters
 - **Float mode** (default): drag the header to move, drag the bottom-right corner to resize
-- **⇤ / ❐ button:** dock the chat to the left side of the page, or float it again. In docked mode, drag the right edge to change the width
+- **Dock button:** cycle between float, left dock, and right dock. In docked mode, drag the inner edge to change the width
+- **Guide:** open a quick usage guide with examples and the image order/limits declared for available image workflows
 - **Model dropdown:** select available models or enter a custom model
 - **Unload:** free the active local model from GPU VRAM/RAM (Ollama)
 - **Clear:** reset the conversation
@@ -122,7 +124,7 @@ You can configure settings directly inside ComfyUI by clicking the **⚙** butto
 - **Skill routing**: the registry validates each skill against its saved graph and exposes route rationale, required inputs/model files, and ranked alternatives.
 - **Enter** sends, **Shift+Enter** adds a newline
 
-Window state (open/closed, mode, position, size) is remembered in the browser. Docked offsets are set by `DOCK_LEFT` and `DOCK_TOP` at the top of `web/superagent_panel.js`.
+Window state (open/closed, mode, position, size) is remembered in the browser. Dock offsets are set by `DOCK_LEFT`, `DOCK_RIGHT`, and `DOCK_TOP` at the top of `web/superagent_panel.js`.
 
 ## Hardware notes
 
@@ -139,4 +141,3 @@ Check the CPU/GPU split with `ollama ps`, and speed with `ollama run <model> --v
 | Model list empty | Run `ollama list`; pull a model, or check API key in Settings (⚙) |
 | Very slow first reply | Local model is loading and splitting across CPU/GPU. Normal on 8 GB VRAM |
 | Panel loads but chat errors | Open browser dev console (F12) and ComfyUI console for the message |
-

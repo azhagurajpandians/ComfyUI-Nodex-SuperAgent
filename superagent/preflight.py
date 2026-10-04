@@ -120,4 +120,3 @@ def inspect(plan, request=""):
         "warnings": warnings,
         "can_proceed": not missing,
     }
-

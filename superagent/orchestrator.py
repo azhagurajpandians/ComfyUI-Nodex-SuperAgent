@@ -1,14 +1,34 @@
 """Deterministic workflow routing and plan construction."""
 
+import difflib
 import re
 
 from .registry import list_skills
 
 
 _PROMPT_ONLY = re.compile(r"\b(prompt|describe|analy[sz]e|what is in|caption)\b", re.I)
-_GENERATE = re.compile(r"\b(createa?|generatea?|re[\s-]*g(?:e)?nerate|regenerate|make|render|animate|edit|change|chage|replace|remove|restyle|inpaint|outpaint|transform|upscale|run)\b", re.I)
-_VIDEO = re.compile(r"\b(video|clip|movie|animation|animate|t2v|i2v)\b", re.I)
+_GENERATE = re.compile(r"\b(createa?|generatea?|gneratea?|re[\s-]*g(?:e)?nerate|regenerate|make|render|animate|edit|change|chage|replace|remove|restyle|inpaint|outpaint|transform|upscale|run)\b", re.I)
+_VIDEO = re.compile(r"\b(video|clip|animation|animate|t2v|i2v)\b", re.I)
 _IMAGE_EDIT = re.compile(r"\b(edit|change|chage|replace|remove|add|transform|inpaint|outpaint|restyle|move|put|place|position|sit|stand|turn)\b", re.I)
+_GENERATION_ACTION = re.compile(r"\b(createa?|generatea?|gneratea?|gnerate|re[\s-]*g(?:e)?nerate|regenerate|render|animate|edit|inpaint|outpaint|restyle|transform|upscale)\b", re.I)
+_SCENE_ACTION = re.compile(r"\b(sit|stand|pose|move|put|place|position|turn|wear|hold|watch(?:ing)?)\b", re.I)
+_IMAGE_ENTITY = re.compile(r"\b(boy|girl|man|woman|person|subject|character|shirt|clothing|background|hair|face|object|scene|image|photo|picture|landscape|portrait)\b", re.I)
+_MAKE_IMAGE = re.compile(r"\bmake\s+(?:(?:an?|the)\s+)?(?:image|picture|photo|scene|landscape|portrait|video)\b", re.I)
+_WORD = re.compile(r"\b[A-Za-z][A-Za-z'-]*\b")
+_COMMON_MISSPELLINGS = {
+    "gneratea": "generate a", "gnerate": "generate", "generatea": "generate a",
+    "createa": "create a", "creata": "create a", "chsange": "change", "chage": "change",
+    "chnage": "change", "thsirt": "shirt", "thshirt": "shirt", "tshirt": "t-shirt",
+    "reslotuion": "resolution", "resoltuion": "resolution", "reslotution": "resolution",
+    "worklfow": "workflow", "wokflow": "workflow", "wrokflow": "workflow",
+    "refrecene": "reference", "refernece": "reference", "uplad": "upload",
+    "whte": "white", "colur": "color", "kread": "krea", "qween": "qwen",
+}
+_SPELLING_VOCABULARY = (
+    "generate create image picture photo edit change replace remove add restyle inpaint outpaint transform upscale "
+    "resolution landscape portrait reference workflow upload color colour shirt clothing background hair face quality "
+    "cinematic natural ocean beach mountain video animation identity model sampler prompt white black red blue green"
+).split()
 _ACTIVE_RUN = re.compile(r"\b(?:run|queue|execute|use)\b.*\b(?:active|current)\b.*\b(?:canvas|workflow)\b", re.I)
 _CANVAS_SETTING = re.compile(r"\b(?:resolution|resol(?:u?tio?n)?|aspect\s+ratio|ratio|size|hd|720p|1080p|full\s*hd)\b", re.I)
 _SETTING_VERB = re.compile(r"\b(?:set|change|chnage|switch|adjust|update|make)\b", re.I)
@@ -17,6 +37,33 @@ _RUN_VERB = re.compile(r"\b(?:generate|create|render|regenerate|re\s+gnerate|que
 
 def _norm(text):
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def normalize_request(text):
+    """Repair obvious typos in routing vocabulary without rewriting names/details."""
+    corrections = {}
+
+    def fix_word(match):
+        original = match.group(0)
+        lower = original.lower()
+        replacement = _COMMON_MISSPELLINGS.get(lower)
+        if replacement is None and len(lower) >= 5:
+            candidate = difflib.get_close_matches(lower, _SPELLING_VOCABULARY, n=1, cutoff=0.86)
+            if candidate and candidate[0] != lower:
+                replacement = candidate[0]
+        if not replacement:
+            return original
+        if replacement.isalpha() and original[:1].isupper():
+            replacement = replacement.capitalize()
+        corrections.setdefault(lower, replacement)
+        return replacement
+
+    normalized = _WORD.sub(fix_word, str(text or ""))
+    normalized, article_count = re.subn(r"\ba\s+(image|ocean|object|animal)\b", r"an \1", normalized, flags=re.I)
+    if article_count:
+        corrections.setdefault("a image", "an image")
+    entries = [{"from": source, "to": target} for source, target in corrections.items()]
+    return normalized, entries
 
 
 def _contains_alias(text, alias):
@@ -49,6 +96,17 @@ def _candidate_summary(skills, text, intent, selected_id=None):
     return ranked[:5]
 
 
+def _image_input_message(skill):
+    name = skill.get("name", "this workflow")
+    if skill.get("id") == "krea2_i2i":
+        return f"Attach the image you want to edit. For Krea Identity Edit, image 1 is the edit source; image 2 is an optional identity/person reference."
+    if skill.get("id") == "qwen_image_edit":
+        return f"Attach the image you want to edit. For Qwen Image Edit, put the source first, then add any reference images in order (up to {skill.get('max_images', 10)} images total)."
+    max_images = skill.get("max_images") or len(skill.get("image_selectors", [])) or 1
+    suffix = f" You can attach up to {max_images} images." if max_images > 1 else ""
+    return f"Attach an image to use {name}.{suffix}"
+
+
 def _intent(text, has_image=False, has_video=False):
     if _ACTIVE_RUN.search(text):
         return "run_current"
@@ -75,16 +133,37 @@ def _intent(text, has_image=False, has_video=False):
     return "text_to_image"
 
 
+def _is_resolution_only_request(text):
+    """Only short, settings-focused turns should bypass workflow routing."""
+    if not (_CANVAS_SETTING.search(text) and _SETTING_VERB.search(text)):
+        return False
+    if _GENERATION_ACTION.search(text) or _MAKE_IMAGE.search(text):
+        return False
+    if _SCENE_ACTION.search(text) and _IMAGE_ENTITY.search(text):
+        return False
+    # A clothing/subject/background edit in the same turn as a resolution
+    # request is still a generation task, while "change resolution to HD" is not.
+    if _IMAGE_EDIT.search(text) and re.search(r"\b(?:shirt|clothing|background|hair|face|person|subject|object|image|photo|picture)\b", text, re.I):
+        return False
+    return True
+
+
 def plan_request(text, has_image=False, has_video=False, active_workflow=None):
-    text = str(text or "")
-    if _CANVAS_SETTING.search(text) and _SETTING_VERB.search(text) and not re.search(r"\b(?:generate|create|render|regenerate|re\s+gnerate|queue|run|execute)\b", text, re.I):
+    original_text = str(text or "")
+    text, normalizations = normalize_request(original_text)
+    if _is_resolution_only_request(text):
         return {
             "status": "canvas_settings", "intent": "canvas_settings", "steps": [],
             "message": "Update the active canvas settings without loading or running a workflow.",
-            "target": "active_canvas",
+            "target": "active_canvas", "original_request": original_text,
+            "normalized_request": text, "normalizations": normalizations,
         }
     intent = _intent(text, has_image=has_image, has_video=has_video)
-    plan = {"status": "chat", "intent": intent, "steps": [], "message": None}
+    plan = {
+        "status": "chat", "intent": intent, "steps": [], "message": None,
+        "original_request": original_text, "normalized_request": text,
+        "normalizations": normalizations,
+    }
     if intent == "run_current":
         plan.update(status="active_canvas", message="The user explicitly requested the active canvas workflow.", route_reason="Explicit active-canvas instruction.")
         return plan
@@ -124,7 +203,7 @@ def plan_request(text, has_image=False, has_video=False, active_workflow=None):
             plan.update(status="unavailable", skill_id=skill["id"], skill_name=skill["name"], message=f"{skill['name']} is not configured: {skill.get('reason')}", route_reason="The requested skill matched by name, but it is not runnable.", candidates=_candidate_summary(skills, text, intent, skill["id"]))
             return plan
         if skill.get("image_selector") and not has_image:
-            plan.update(status="needs_input", skill_id=skill["id"], skill_name=skill["name"], message=f"Attach an image to use {skill['name']}.")
+            plan.update(status="needs_input", skill_id=skill["id"], skill_name=skill["name"], message=_image_input_message(skill))
             return plan
         if skill.get("requires_video_upload"):
             plan.update(status="unavailable", skill_id=skill["id"], skill_name=skill["name"], message=f"{skill['name']} needs a video input. Video upload is not enabled in this panel yet.")
@@ -136,7 +215,7 @@ def plan_request(text, has_image=False, has_video=False, active_workflow=None):
             plan.update(status="incompatible", skill_id=skill["id"], skill_name=skill["name"], message=f"{skill['name']} does not define an image input, so it cannot use the attached image.")
             return plan
         if intent in ("image_edit", "image_with_references", "image_to_video") and skill.get("image_selector") and not has_image:
-            plan.update(status="needs_input", skill_id=skill["id"], skill_name=skill["name"], message=f"Attach an image to use {skill['name']}.")
+            plan.update(status="needs_input", skill_id=skill["id"], skill_name=skill["name"], message=_image_input_message(skill))
             return plan
     else:
         candidates = [s for s in available if s.get("task") == intent]
@@ -168,7 +247,7 @@ def plan_request(text, has_image=False, has_video=False, active_workflow=None):
         plan.update(status="unavailable", skill_id=skill["id"], skill_name=skill["name"], message=f"{skill['name']} needs a video input. Video upload is not enabled in this panel yet.")
         return plan
     if skill.get("image_selector") and not has_image and intent in ("image_edit", "image_with_references", "image_to_video"):
-        plan.update(status="needs_input", skill_id=skill["id"], skill_name=skill["name"], message=f"Attach an image to use {skill['name']}.")
+        plan.update(status="needs_input", skill_id=skill["id"], skill_name=skill["name"], message=_image_input_message(skill))
         return plan
     if has_image and not skill.get("image_selector") and intent in ("image_edit", "image_with_references", "image_to_video"):
         plan.update(status="incompatible", skill_id=skill["id"], skill_name=skill["name"], message=f"{skill['name']} does not define an image input, so it cannot use the attached image.")
@@ -222,5 +301,4 @@ def plan_request(text, has_image=False, has_video=False, active_workflow=None):
         ],
     )
     return plan
-
 

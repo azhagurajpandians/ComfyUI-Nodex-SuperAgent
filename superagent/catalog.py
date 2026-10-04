@@ -204,4 +204,3 @@ def list_skills():
         skills.append(skill)
     return skills
 
-

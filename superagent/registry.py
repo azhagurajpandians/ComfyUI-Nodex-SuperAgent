@@ -63,4 +63,3 @@ def list_skills():
 
 def get_skill(skill_id):
     return next((skill for skill in list_skills() if skill.get("id") == skill_id), None)
-

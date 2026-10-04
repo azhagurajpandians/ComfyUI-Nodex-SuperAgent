@@ -144,6 +144,52 @@ async def agent_plan(request):
     return web.json_response({"plan": plan})
 
 
+@routes.post("/superagent/enhance_prompt")
+async def agent_enhance_prompt(request):
+    """Turn a ready routed request into a workflow-ready visual prompt."""
+    try:
+        body = await request.json()
+    except Exception:
+        return _err("Invalid JSON body", 400)
+    source = str(body.get("request") or "").strip()
+    plan = body.get("plan") or {}
+    if not source or plan.get("status") != "ready":
+        return _err("A request and ready workflow plan are required", 400)
+
+    task = plan.get("task", "text_to_image")
+    prompt_rules = (
+        "Write a single, polished visual prompt for the selected ComfyUI workflow. Return only the prompt, without a preface, questions, options, markdown, or action tags. Preserve every concrete subject, action, setting, named character, and style from the request. Do not add unrelated story details or change the user's intent. Do not include workflow/model names or interface commands as image content."
+    )
+    if task in ("image_edit", "image_with_references"):
+        prompt_rules += " Describe the requested edit clearly. Specify what to change and preserve the subject identity and unrelated scene details."
+    elif task in ("text_to_image", "text_to_video"):
+        prompt_rules += " Expand the brief with useful composition, lighting, material, atmosphere, and visual-quality details that fit the requested subject and style. Translate aspect-ratio requests into composition guidance, not literal text in the image."
+    if plan.get("prompt_guidance"):
+        prompt_rules += " Workflow guidance: " + str(plan["prompt_guidance"])
+
+    cfg = config.load()
+    model = body.get("model") or cfg.get("default_model")
+    messages = [
+        {"role": "system", "content": prompt_rules},
+        {"role": "user", "content": source},
+    ]
+    chunks = []
+    try:
+        async for chunk in llm.stream_chat(cfg, model, messages, think=False):
+            content = (chunk.get("message") or {}).get("content") or ""
+            if content:
+                chunks.append(content)
+    except Exception as exc:
+        return _err(f"Prompt enhancement failed: {exc}", 502)
+
+    enhanced = "".join(chunks).strip()
+    enhanced = re.sub(r"^```(?:\w+)?\s*|\s*```$", "", enhanced).strip()
+    enhanced = re.sub(r"^(?:prompt|enhanced prompt)\s*:\s*", "", enhanced, flags=re.I).strip().strip('"')
+    if not enhanced or re.search(r"\b(?:cannot help|can't help|not appropriate or ethical)\b", enhanced, re.I):
+        return _err("The model did not return a usable enhanced prompt", 502)
+    return web.json_response({"prompt": enhanced[:6000]})
+
+
 @routes.post("/superagent/preflight")
 async def agent_preflight(request):
     try:
@@ -213,6 +259,15 @@ async def agent_chat(request):
         system_prompt += f"\n\n--- ACTIVE COMFYUI CANVAS WORKFLOW ---\n{workflow_context}\n---------------------------------------"
 
     plan = body.get("orchestration_plan") or {}
+    if plan.get("normalizations"):
+        fixes = "; ".join(f"{item.get('from')} → {item.get('to')}" for item in plan["normalizations"])
+        system_prompt += (
+            "\n\n--- OBVIOUS SPELLING CORRECTIONS ---\n"
+            f"Interpret the user's request with these spelling fixes: {fixes}. "
+            f"Corrected request: {plan.get('normalized_request', '')}. "
+            "This is only a spelling cleanup: preserve character names, creative details, and the user's intended action. "
+            "Use the corrected request when writing the workflow prompt.\n-----------------------------------"
+        )
     if plan.get("status") == "ready":
         system_prompt += (
             "\n\n--- ORCHESTRATOR ROUTE (AUTHORITATIVE) ---\n"
@@ -331,4 +386,3 @@ async def agent_chat(request):
     except ConnectionResetError:
         pass
     return resp
-

@@ -2,8 +2,11 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 const STORE = "nodex_superagent_ui";
+const ACCENT = "#dfff32";
+const ACCENT_HOVER = "#e8ff62";
 let latestGeneratedImage = null;
 const DOCK_LEFT = 56; // px: clears ComfyUI's left sidebar icon bar
+const DOCK_RIGHT = 0; // px from viewport edge
 const DOCK_TOP = 48; // px: clears ComfyUI's top bar
 
 const PROVIDER_INFO = {
@@ -46,15 +49,17 @@ const PROVIDER_INFO = {
 
 const css = `
 .sa-launcher{position:fixed;z-index:9998;width:48px;height:48px;border-radius:50%;
-  border:1px solid #666;background:#2a2a2a;color:#ffd34d;font-size:22px;cursor:grab;touch-action:none;user-select:none;
+  border:1px solid #666;background:#2a2a2a;color:${ACCENT};font-size:22px;cursor:grab;touch-action:none;user-select:none;
   box-shadow:0 4px 14px rgba(0,0,0,.5);transition:transform 0.15s ease}
 .sa-launcher:hover{background:#383838;transform:scale(1.06)}
 .sa-launcher:active{cursor:grabbing}
-.sa-launcher.sa-on{background:#ffd34d;color:#222}
+.sa-launcher.sa-on{background:${ACCENT};color:#222}
 .sa-win{position:fixed;z-index:9999;display:none;flex-direction:column;background:var(--comfy-menu-bg,#202020);
   color:var(--fg-color,#ddd);border:1px solid #555;border-radius:8px;box-shadow:0 8px 30px rgba(0,0,0,.55);
   overflow:hidden;min-width:320px;min-height:300px;resize:both;font-size:13px}
-.sa-win.sa-docked{resize:none;border-radius:0;border-width:0 1px 0 0}
+.sa-win.sa-docked{resize:none;border-radius:0}
+.sa-win.sa-dock-left{border-width:0 1px 0 0}
+.sa-win.sa-dock-right{border-width:0 0 0 1px}
 .sa-head{display:flex;align-items:center;gap:6px;padding:6px 8px;background:#2c2c2c;border-bottom:1px solid #444;
   cursor:move;user-select:none}
 .sa-win.sa-docked .sa-head{cursor:default}
@@ -65,16 +70,26 @@ const css = `
 .sa-body{flex:1;min-height:0;display:flex;flex-direction:column;position:relative}
 .sa-grip{display:none;position:absolute;top:0;right:0;width:6px;height:100%;cursor:ew-resize}
 .sa-win.sa-docked .sa-grip{display:block}
-.sa-grip:hover{background:#ffd34d55}
+.sa-win.sa-dock-right .sa-grip{left:0;right:auto}
+.sa-grip:hover{background:${ACCENT}55}
 
 /* Chat view */
 .ca-wrap{display:flex;flex-direction:column;height:100%}
 .ca-bar{display:flex;align-items:center;gap:6px;padding:6px;border-bottom:1px solid #444}
 .ca-prov-badge{font-size:10px;font-weight:700;text-transform:uppercase;padding:2px 5px;border-radius:3px;
-  background:#333;color:#ffd34d;border:1px solid #555;white-space:nowrap}
+  background:#333;color:${ACCENT};border:1px solid #555;white-space:nowrap}
 .ca-bar select{flex:1;min-width:0;background:#1a1a1a;color:#eee;border:1px solid #444;border-radius:4px;padding:3px 5px}
 .ca-bar button{background:#333;border:1px solid #555;color:#eee;border-radius:4px;padding:3px 8px;cursor:pointer}
 .ca-bar button:hover{background:#444}
+.ca-guide-btn{white-space:nowrap}
+.ca-guide{padding:9px 11px;background:#1b2420;border-bottom:1px solid #40513a;color:#ddd;font-size:12px;line-height:1.5}
+.ca-guide[hidden]{display:none}
+.ca-guide-title{font-weight:700;color:${ACCENT};margin-bottom:4px}
+.ca-guide ul{margin:4px 0 0;padding-left:19px}
+.ca-guide li{margin:2px 0}
+.ca-prompt-preview{padding:7px 9px;background:#202020;border:1px solid #444;border-radius:5px;font-size:11px;color:#bbb}
+.ca-prompt-preview summary{cursor:pointer;color:${ACCENT};font-weight:600}
+.ca-prompt-preview div{margin-top:6px;white-space:pre-wrap;line-height:1.45}
 .ca-log{flex:1;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:8px}
 .ca-msg{white-space:pre-wrap;word-break:break-word;padding:8px 10px;border-radius:6px;line-height:1.4}
 .ca-user{background:#2b3a4a;align-self:flex-end;max-width:90%}
@@ -83,12 +98,12 @@ const css = `
 .ca-think{font-size:11px;color:#888;border-left:2px solid #555;padding-left:6px;margin-bottom:6px;white-space:pre-wrap}
 .ca-in{display:flex;gap:6px;padding:6px;border-top:1px solid #444}
 .ca-in textarea{flex:1;resize:none;height:56px;background:#181818;color:#eee;border:1px solid #444;border-radius:4px;padding:6px}
-.ca-send{background:#ffd34d;border:none;border-radius:4px;color:#222;font-weight:600;padding:0 12px;cursor:pointer}
-.ca-send:hover{background:#ffe066}
+.ca-send{background:${ACCENT};border:none;border-radius:4px;color:#222;font-weight:600;padding:0 12px;cursor:pointer}
+.ca-send:hover{background:${ACCENT_HOVER}}
 
 /* Action & Status Cards */
-.ca-action-badge{display:inline-flex;align-items:center;gap:4px;background:#ffd34d22;color:#ffd34d;
-  border:1px solid #ffd34d55;border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;margin-bottom:6px}
+.ca-action-badge{display:inline-flex;align-items:center;gap:4px;background:${ACCENT}22;color:${ACCENT};
+  border:1px solid ${ACCENT}55;border-radius:4px;padding:3px 8px;font-size:11px;font-weight:600;margin-bottom:6px}
 .ca-status-bar{display:flex;align-items:center;gap:8px;background:#182838;color:#79c0ff;
   border:1px solid #388bfd44;padding:8px 10px;border-radius:6px;font-size:12px;margin-top:6px}
 .ca-spinner{animation:sa-spin 1.5s linear infinite;display:inline-block}
@@ -119,19 +134,19 @@ const css = `
 
 /* Settings view */
 .sa-settings-wrap{display:none;flex-direction:column;height:100%;background:var(--comfy-menu-bg,#202020);color:var(--fg-color,#ddd)}
-.sa-cfg-header{padding:8px 10px;background:#282828;border-bottom:1px solid #444;font-size:12px;font-weight:600;color:#ffd34d;display:flex;justify-content:space-between;align-items:center}
+.sa-cfg-header{padding:8px 10px;background:#282828;border-bottom:1px solid #444;font-size:12px;font-weight:600;color:${ACCENT};display:flex;justify-content:space-between;align-items:center}
 .sa-cfg-body{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:9px}
 .sa-cfg-group{display:flex;flex-direction:column;gap:3px}
 .sa-cfg-group label{font-size:11px;color:#aaa;font-weight:600;text-transform:uppercase;letter-spacing:0.4px}
 .sa-cfg-group input,.sa-cfg-group select,.sa-cfg-group textarea{background:#181818;color:#eee;border:1px solid #444;border-radius:4px;padding:5px 7px;font-size:12px;outline:none}
-.sa-cfg-group input:focus,.sa-cfg-group select:focus,.sa-cfg-group textarea:focus{border-color:#ffd34d}
+.sa-cfg-group input:focus,.sa-cfg-group select:focus,.sa-cfg-group textarea:focus{border-color:${ACCENT}}
 .sa-cfg-row-two{display:flex;gap:8px}
 .sa-cfg-row-two .sa-cfg-group{flex:1}
 .sa-cfg-hint{font-size:11px;color:#9cdcfe;background:#1a2530;border:1px solid #2d455d;border-radius:4px;padding:5px 8px;line-height:1.4}
 .sa-cfg-footer{display:flex;gap:8px;padding:8px 10px;border-top:1px solid #444;background:#252525}
 .sa-cfg-footer button{flex:1;padding:6px;border-radius:4px;border:none;cursor:pointer;font-size:12px;font-weight:600}
-.sa-cfg-save{background:#ffd34d;color:#222}
-.sa-cfg-save:hover{background:#ffe066}
+.sa-cfg-save{background:${ACCENT};color:#222}
+.sa-cfg-save:hover{background:${ACCENT_HOVER}}
 .sa-cfg-cancel{background:#383838;color:#ccc}
 .sa-cfg-cancel:hover{background:#484848}
 `;
@@ -142,6 +157,30 @@ const ui = Object.assign(
 );
 const save = () => { try { localStorage.setItem(STORE, JSON.stringify(ui)); } catch {} };
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+function applyRequestNormalizations(content, corrections) {
+  if (!content || !Array.isArray(corrections) || corrections.length === 0) return content;
+
+  // Keep generated attachment labels and their filenames byte-for-byte intact.
+  const attachmentStart = content.search(/\n(?:\[Attached Image|📷)/);
+  let request = attachmentStart >= 0 ? content.slice(0, attachmentStart) : content;
+  const attachmentText = attachmentStart >= 0 ? content.slice(attachmentStart) : "";
+
+  for (const correction of corrections) {
+    if (!correction?.from || !correction?.to) continue;
+    const escaped = String(correction.from).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    request = request.replace(new RegExp(`\\b${escaped}\\b`, "gi"), String(correction.to));
+  }
+  return request + attachmentText;
+}
+
+function isSimpleClothingColorChange(request) {
+  const text = String(request || "");
+  const hasGarment = /\b(?:shirt|t-shirt|tshirt|top|jacket|coat|dress|pants|trousers|skirt|clothing|outfit)\b/i.test(text);
+  const hasColorChange = /\b(?:change|make|turn|switch|recolor|colour|color)\b/i.test(text);
+  const hasColor = /\b(?:color|colour|to|into|white|black|red|blue|green|yellow|orange|purple|pink|brown|gray|grey)\b/i.test(text);
+  return hasGarment && hasColorChange && hasColor;
+}
 
 // Helper: Locate positive and negative prompt nodes in the current ComfyUI workflow
 function findPromptNodes() {
@@ -803,10 +842,12 @@ function buildPanel(root, settingsBtn) {
         <select class="ca-workflow" title="Load Workflow Template onto Canvas">
           <option value="">📁 Workflow: (Active)</option>
         </select>
+        <button class="ca-guide-btn" title="Show the quick guide">Guide</button>
         <button class="ca-browse-templates" title="Open ComfyUI Templates Browser">Templates</button>
         <button class="ca-unload" title="Unload model from VRAM">Unload</button>
         <button class="ca-clear" title="Clear chat">Clear</button>
       </div>
+      <div class="ca-guide" hidden></div>
       <div class="ca-log"></div>
       <div class="ca-img-preview-box"></div>
       <div class="ca-in">
@@ -877,6 +918,7 @@ function buildPanel(root, settingsBtn) {
   const log = $(".ca-log"), sel = $(".ca-model"), box = $(".ca-text"), sendBtn = $(".ca-send");
   const provBadge = $(".ca-prov-badge"), unloadBtn = $(".ca-unload"), wfSel = $(".ca-workflow");
   const templateBtn = $(".ca-browse-templates"), uploadBtn = $(".ca-upload-btn"), fileInput = $(".ca-file-input");
+  const guideBtn = $(".ca-guide-btn"), guideBox = $(".ca-guide");
   const previewBox = $(".ca-img-preview-box");
   const cfgOptions = $(".sa-cfg-options");
 
@@ -915,7 +957,7 @@ function buildPanel(root, settingsBtn) {
       loadSettingsIntoForm();
       chatView.style.display = "none";
       settingsView.style.display = "flex";
-      settingsBtn.style.color = "#ffd34d";
+      settingsBtn.style.color = ACCENT;
     } else {
       chatView.style.display = "flex";
       settingsView.style.display = "none";
@@ -1132,6 +1174,8 @@ function buildPanel(root, settingsBtn) {
       if (!res.ok) return;
       workflowCatalog = data.workflows || [];
       availableSkills = data.skills || [];
+      uploadBtn.title = "Upload up to 10 images. See Guide for image order and workflow-specific roles.";
+      renderGuide();
       wfSel.replaceChildren(new Option("📁 Workflow: (Active Canvas)", ""));
       for (const workflow of workflowCatalog) {
         const option = new Option(`${workflow.name} · ${workflow.source}`, workflow.id);
@@ -1141,6 +1185,36 @@ function buildPanel(root, settingsBtn) {
       console.warn("Failed to load workflow list:", e);
     }
   }
+
+  function renderGuide() {
+    guideBox.replaceChildren();
+    const title = document.createElement("div");
+    title.className = "ca-guide-title";
+    title.textContent = "Quick guide · Tell the agent what to do and which inputs to use";
+    const intro = document.createElement("div");
+    intro.textContent = "Choose a workflow from the menu or name a model in your request. Add images with 📷+ in the order they should be used. Describe the requested change and what must stay the same. Review the preflight details, then choose Load workflow and queue.";
+    const list = document.createElement("ul");
+    for (const skill of availableSkills.filter((item) => item.available && item.image_selector)) {
+      const row = document.createElement("li");
+      const limit = skill.max_images || skill.image_selectors?.length || 1;
+      const roles = skill.id === "krea2_i2i"
+        ? "image 1 = edit source; image 2 = optional identity/person reference"
+        : skill.id === "qwen_image_edit"
+          ? "image 1 = edit source; later images = references"
+          : "put the source first; follow with reference images if supported";
+      row.textContent = `${skill.name} (up to ${limit} images): ${roles}.`;
+      list.appendChild(row);
+    }
+    const example = document.createElement("div");
+    example.style.marginTop = "5px";
+    example.textContent = 'Example edit: “Change the shirt to white; keep the person and background unchanged; use Krea edit.” Example generation: “Generate a Himalayan landscape with Krea, widescreen.”';
+    guideBox.append(title, intro, list, example);
+  }
+
+  guideBtn.onclick = () => {
+    guideBox.hidden = !guideBox.hidden;
+    guideBtn.textContent = guideBox.hidden ? "Guide" : "Hide guide";
+  };
 
   wfSel.addEventListener("change", async () => {
     const chosen = wfSel.value;
@@ -1153,12 +1227,16 @@ function buildPanel(root, settingsBtn) {
     }
   });
 
-  async function send() {
+  async function send(taskContext = null) {
+    // DOM click handlers pass a PointerEvent; only the internal guided-choice
+    // handlers are allowed to supply continuation text.
+    if (typeof taskContext !== "string") taskContext = null;
     const text = box.value.trim();
     if ((!text && !currentAttachments.length) || busy) return;
     busy = true; sendBtn.disabled = true; box.value = "";
 
     const previousUserTurns = history.filter((message) => message.role === "user");
+    const previousAssistantTurn = [...history].reverse().find((message) => message.role === "assistant");
     const previousImageMessage = [...previousUserTurns].reverse().find((message) => message.attachments?.length || message.attachment?.name);
     const previousActionMessage = [...previousUserTurns].reverse().find((message) =>
       /\b(create|generate|make|render|animate|edit|change|replace|remove|restyle|inpaint|outpaint|transform|upscale)\b/i.test(message.content || "")
@@ -1166,10 +1244,16 @@ function buildPanel(root, settingsBtn) {
     const previousActionText = (previousActionMessage?.content || "").replace(/\[Attached Image:[^\]]+\]/g, "").trim();
     const shortFollowUp = /^(?:(?:use|with)\s+)?(?:krea(?:\s*2)?|qwen(?:\s+image)?|ltx(?:\s*2?\.?3)?|minimax|mini\s*max)(?:\s+(?:text\s+to\s+image|image\s+to\s+image|text\s+to\s+video|image\s+to\s+video|t2i|i2i|t2v|i2v))?[.!?\s]*$|^(?:now|do it|go ahead|continue|again|run it)[.!?\s]*$/i.test(text);
     const regenerateFollowUp = /\b(?:re[\s-]*g(?:e)?nerate|regenerate|again|same image)\b/i.test(text);
-    const continuePreviousTask = shortFollowUp || regenerateFollowUp;
+    const answerToAgentQuestion = !!previousAssistantTurn && text.length <= 180 &&
+      (/[?]/.test(previousAssistantTurn.content || "") || /\b(?:choose|select|which .* would you like)\b/i.test(previousAssistantTurn.content || ""));
+    const continuePreviousTask = shortFollowUp || regenerateFollowUp || answerToAgentQuestion;
     const currentLooksLikeEdit = /\b(edit|change|chage|replace|remove|restyle|inpaint|outpaint|move|put|place|position|sit|stand|turn|t[\s-]?shirt|shirt|clothing|hair|background|colour|color|face)\b/i.test(text);
     const priorLooksLikeEdit = /\b(edit|change|chage|replace|remove|restyle|inpaint|outpaint|t[\s-]?shirt|shirt|clothing|hair|background|colour|color|face)\b/i.test(previousActionText);
-    const planningText = continuePreviousTask && previousActionText ? `${previousActionText}\n${text}` : text;
+    let planningText = taskContext
+      ? `${taskContext}\n${text}`
+      : continuePreviousTask && previousActionText
+        ? `${previousActionText}\n${text}`
+        : text;
 
     let userDisplay = text;
     let userPrompt = text;
@@ -1216,6 +1300,7 @@ function buildPanel(root, settingsBtn) {
         const planData = await planRes.json();
         if (!planRes.ok) throw new Error(planData.error || "Planner request failed");
         orchestrationPlan = planData.plan;
+        if (orchestrationPlan.normalized_request) planningText = orchestrationPlan.normalized_request;
       } catch (planError) {
         orchestrationPlan = { status: "planner_error", message: planError.message };
       }
@@ -1250,7 +1335,9 @@ function buildPanel(root, settingsBtn) {
           model: sel.value,
           messages: history.map((m, index) => ({
             role: m.role,
-            content: m.content,
+            content: index === history.length - 1 && m.role === "user"
+              ? applyRequestNormalizations(m.content, orchestrationPlan.normalizations)
+              : m.content,
             // Send pixels only for this request's explicit or intentionally
             // reused image context. Old uploads stay in text history, not as
             // accidental visual input to unrelated new generations.
@@ -1317,13 +1404,19 @@ function buildPanel(root, settingsBtn) {
         const runMatch = acc.match(/\[ACTION:RUN_WORKFLOW\]/i);
         const safeFallbackIntent = ["text_to_image", "image_edit", "text_to_video", "image_to_video", "image_with_references"].includes(orchestrationPlan.intent);
         const modelRefused = /cannot provide|can't provide|cannot help|can't help|not appropriate or ethical|safety policy/i.test(acc);
-        if (!orchestratorAction && !genMatch && !runMatch && orchestrationPlan.status === "ready" && safeFallbackIntent && !modelRefused) {
+        const simpleClothingColorFallback = modelRefused && orchestrationPlan.status === "ready" &&
+          orchestrationPlan.intent === "image_edit" && isSimpleClothingColorChange(planningText);
+        const deterministicActionFallback = !orchestratorAction && !genMatch && !runMatch &&
+          orchestrationPlan.status === "ready" && safeFallbackIntent && (!modelRefused || simpleClothingColorFallback);
+        if (deterministicActionFallback) {
           // The user explicitly requested generation (the planner only returns
           // these intents for action verbs). If the LLM returns prose/caption
           // instead of a tag, use the request as the prompt after preflight.
           orchestratorAction = {
             type: orchestrationPlan.intent === "image_edit" ? "edit_image" : "run",
-            prompt: planningText,
+            prompt: simpleClothingColorFallback
+              ? `${planningText}. Change only the requested clothing color; preserve the person's identity, pose, background, lighting, and all other image details.`
+              : planningText,
           };
         }
         const generationRequested = !!(orchestratorAction || genMatch || runMatch);
@@ -1331,7 +1424,7 @@ function buildPanel(root, settingsBtn) {
         // Parse Option Chips from assistant response
         const optMatch = acc.match(/\[OPTIONS:\s*(.*?)\]/i);
         let optionChips = [];
-        if (optMatch) {
+        if (optMatch && !deterministicActionFallback) {
           const rawOpts = optMatch[1];
           optionChips = rawOpts
             .split("|")
@@ -1351,6 +1444,13 @@ function buildPanel(root, settingsBtn) {
           .replace(/\[ACTION:RUN_WORKFLOW\]/gi, "")
           .replace(/\[OPTIONS:\s*.*?\]/gi, "")
           .trim();
+
+        if (deterministicActionFallback) {
+          cleanText = simpleClothingColorFallback
+            ? `I selected ${orchestrationPlan.skill_name} and kept its workflow settings. Applying only the requested clothing color change.`
+            : `I selected ${orchestrationPlan.skill_name}. I’ll use its saved settings and sensible defaults for this request.`;
+          history[history.length - 1] = { role: "assistant", content: cleanText };
+        }
 
         const unsupportedCompletionClaim = /\b(generation complete|image rendering complete|rendered successfully|now displayed below|processing your request to edit)\b/i.test(acc);
         if (unsupportedCompletionClaim) {
@@ -1375,7 +1475,7 @@ function buildPanel(root, settingsBtn) {
             btn.textContent = opt;
             btn.onclick = () => {
               box.value = opt;
-              send();
+              send(planningText);
             };
             chipWrap.appendChild(btn);
           }
@@ -1397,7 +1497,8 @@ function buildPanel(root, settingsBtn) {
         }
 
         // 2. Apply Sampler Change if requested
-        if (samplerMatch) {
+        const explicitSamplerChange = /\b(?:set|change|adjust|update|increase|decrease|raise|lower)\b.{0,50}\b(?:sampler|steps|cfg|denoise|sampling)\b|\b(?:sampler|steps|cfg|denoise)\b.{0,30}\b(?:to|at)\s*[\d.]+/i.test(planningText);
+        if (samplerMatch && explicitSamplerChange) {
           const sSteps = samplerMatch[1];
           const sCfg = samplerMatch[2];
           const sDenoise = samplerMatch[3];
@@ -1422,7 +1523,7 @@ function buildPanel(root, settingsBtn) {
               const button = document.createElement("button");
               button.className = "ca-option-chip";
               button.textContent = choice.name;
-              button.onclick = () => { box.value = `Use ${choice.name} to ${text}`; send(); };
+              button.onclick = () => { box.value = `Use ${choice.name}`; send(planningText); };
               choices.appendChild(button);
             }
             out.appendChild(choices);
@@ -1439,14 +1540,18 @@ function buildPanel(root, settingsBtn) {
                 const button = document.createElement("button");
                 button.className = "ca-option-chip";
                 button.textContent = candidate.name;
-                button.onclick = () => { box.value = `Use ${candidate.name} for this request: ${text}`; send(); };
+                button.onclick = () => { box.value = `Use ${candidate.name}`; send(planningText); };
                 choices.appendChild(button);
               }
               out.appendChild(choices);
             }
           }
         } else if (orchestrationPlan.status === "ready" && generationRequested) {
-          const prompt = orchestratorAction?.prompt || genMatch?.[1] || "";
+          let prompt = orchestratorAction?.prompt || genMatch?.[1] || "";
+          const containsDomEvent = /\[object\s+(?:PointerEvent|MouseEvent|KeyboardEvent|Event)\]/i.test(prompt);
+          const promptNeedsEnhancement = deterministicActionFallback || containsDomEvent ||
+            (!!prompt && (prompt.trim().toLowerCase() === planningText.trim().toLowerCase() || prompt.trim().length < planningText.trim().length * 1.35));
+          if (containsDomEvent) prompt = planningText;
           const action = {
             prompt,
             negative_prompt: orchestratorAction?.negative_prompt || "",
@@ -1469,6 +1574,40 @@ function buildPanel(root, settingsBtn) {
             alternatives.textContent = `Other registered skills: ${otherCandidates.map((candidate) => `${candidate.name}${candidate.available ? "" : " (workflow unavailable)"}`).join(" · ")}`;
             out.appendChild(alternatives);
           }
+          if (promptNeedsEnhancement && action.prompt.trim()) {
+            const enhancementStatus = document.createElement("div");
+            enhancementStatus.className = "ca-status-bar";
+            enhancementStatus.textContent = "Enhancing your request into a workflow-ready prompt…";
+            out.appendChild(enhancementStatus);
+            try {
+              const enhancementResponse = await fetch("/superagent/enhance_prompt", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ request: planningText, plan: orchestrationPlan, model: sel.value }),
+              });
+              const enhancementData = await enhancementResponse.json();
+              if (!enhancementResponse.ok) throw new Error(enhancementData.error || "Prompt enhancement failed");
+              if (enhancementData.prompt?.trim()) {
+                action.prompt = enhancementData.prompt.trim();
+                enhancementStatus.textContent = "Prompt enhanced for the selected workflow.";
+              } else {
+                throw new Error("No enhanced prompt was returned");
+              }
+            } catch (enhancementError) {
+              enhancementStatus.className = "ca-img-meta";
+              enhancementStatus.textContent = `Prompt enhancement unavailable; using your original request. ${enhancementError.message}`;
+            }
+          }
+          if (action.prompt.trim()) {
+            const promptDetails = document.createElement("details");
+            promptDetails.className = "ca-prompt-preview";
+            const promptSummary = document.createElement("summary");
+            promptSummary.textContent = "Prompt sent to workflow";
+            const promptText = document.createElement("div");
+            promptText.textContent = action.prompt;
+            promptDetails.append(promptSummary, promptText);
+            out.appendChild(promptDetails);
+          }
           if (!prompt.trim()) {
             const statusEl = document.createElement("div");
             out.appendChild(statusEl);
@@ -1483,7 +1622,7 @@ function buildPanel(root, settingsBtn) {
               const preflightRes = await fetch("/superagent/preflight", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ plan: orchestrationPlan, request: text }),
+                body: JSON.stringify({ plan: orchestrationPlan, request: planningText }),
               });
               const preflightData = await preflightRes.json();
               if (!preflightRes.ok) throw new Error(preflightData.error || "Preflight failed");
@@ -1564,7 +1703,7 @@ function buildPanel(root, settingsBtn) {
                     activeNodes.some((node) => node.type === "LoadImage") &&
                     activeNodes.some((node) => node.type === "KSampler") &&
                     activeNodes.some((node) => node.type === "LoraLoaderModelOnly") &&
-                    activeNodes.some((node) => node.type === "ImageScale") &&
+                    activeNodes.some((node) => ["Krea2EditModelPatch", "Krea2EditGroundedEncode"].includes(node.type)) &&
                     activeNodes.some((node) => node.type === "UNETLoader" && String(node.widgets?.[0]?.value || "").toLowerCase().includes("krea2"));
                   const useActiveGraph = activeWorkflowMatches || activeEditCompatible;
                   statusEl.innerHTML = `<div class="ca-status-bar"><span class="ca-spinner">⚙</span> ${useActiveGraph ? "Using the compatible active edit workflow…" : `Loading ${orchestrationPlan.workflow_name}...`}</div>`;
@@ -1609,9 +1748,37 @@ function buildPanel(root, settingsBtn) {
           await executeGeneration(null, statusEl);
         } else if (["chat", "advice"].includes(orchestrationPlan.status) && generationRequested && !(orchestrationPlan.status === "advice" && genMatch && /(?:need|give|write|get|show|create|extract)\s+(?:a\s+)?prompt\b|describe\s+(?:this|the)?\s*image|what\s+is\s+the\s+prompt/i.test(text))) {
           const routeEl = document.createElement("div");
-          routeEl.className = "ca-err";
-          routeEl.textContent = "No workflow was selected for this generation. Name a model/workflow or choose one from the workflow menu; the active canvas was not queued.";
+          const asksForVideo = /\b(video|clip|animation|animate|t2v|i2v)\b/i.test(planningText);
+          const asksForEdit = routingAttachments.length > 0 || /\b(edit|change|replace|remove|restyle|inpaint|outpaint|transform|sit|stand|place|move|put)\b/i.test(planningText);
+          const tasks = asksForVideo
+            ? (routingAttachments.length ? ["image_to_video", "text_to_video"] : ["text_to_video"])
+            : asksForEdit ? ["image_edit", "image_with_references"] : ["text_to_image"];
+          const suggestions = availableSkills.filter((skill) => skill.available && tasks.includes(skill.task)).slice(0, 4);
+          routeEl.className = suggestions.length ? "ca-bot" : "ca-img-meta";
+          routeEl.textContent = suggestions.length
+            ? "I can help with that. Which workflow would you like me to use?"
+            : "I can answer questions and help plan the result. To generate it, choose a workflow from the menu or tell me which model to use.";
           out.appendChild(routeEl);
+          if (suggestions.length) {
+            const choices = document.createElement("div");
+            choices.className = "ca-options-box";
+            for (const skill of suggestions) {
+              const button = document.createElement("button");
+              button.className = "ca-option-chip";
+              button.textContent = skill.name;
+              button.onclick = () => {
+                box.value = `Use ${skill.name}`;
+                send(planningText);
+              };
+              choices.appendChild(button);
+            }
+            const activeButton = document.createElement("button");
+            activeButton.className = "ca-option-chip";
+            activeButton.textContent = "Use active workflow";
+            activeButton.onclick = () => { box.value = "Use the active workflow"; send(planningText); };
+            choices.appendChild(activeButton);
+            out.appendChild(choices);
+          }
         } else if (orchestrationPlan.status === "ready" && !generationRequested && ["text_to_image", "image_edit", "text_to_video", "image_to_video", "image_with_references"].includes(orchestrationPlan.intent)) {
           const routeEl = document.createElement("div");
           routeEl.className = "ca-err";
@@ -1749,7 +1916,7 @@ function buildPanel(root, settingsBtn) {
     busy = false; sendBtn.disabled = false; box.focus();
   }
 
-  sendBtn.onclick = send;
+  sendBtn.onclick = () => send();
   for (const ev of ["keydown", "keyup", "keypress"]) {
     box.addEventListener(ev, (e) => e.stopPropagation());
     settingsView.addEventListener(ev, (e) => e.stopPropagation());
@@ -1812,11 +1979,17 @@ function createUI() {
   function apply() {
     win.style.display = ui.open ? "flex" : "none";
     launcher.classList.toggle("sa-on", ui.open);
-    win.classList.toggle("sa-docked", ui.mode === "dock");
-    if (ui.mode === "dock") {
+    const dockMode = ui.mode === "dock" ? "dock-left" : ui.mode;
+    const isDocked = dockMode === "dock-left" || dockMode === "dock-right";
+    win.classList.toggle("sa-docked", isDocked);
+    win.classList.toggle("sa-dock-left", dockMode === "dock-left");
+    win.classList.toggle("sa-dock-right", dockMode === "dock-right");
+    if (isDocked) {
       ui.dockW = clamp(ui.dockW, 280, Math.max(320, innerWidth * 0.7));
       Object.assign(win.style, {
-        left: DOCK_LEFT + "px", top: DOCK_TOP + "px",
+        left: dockMode === "dock-left" ? DOCK_LEFT + "px" : "auto",
+        right: dockMode === "dock-right" ? DOCK_RIGHT + "px" : "auto",
+        top: DOCK_TOP + "px",
         width: ui.dockW + "px", height: `calc(100vh - ${DOCK_TOP}px)`,
       });
     } else {
@@ -1830,8 +2003,8 @@ function createUI() {
         left: ui.x + "px", top: ui.y + "px", width: ui.w + "px", height: ui.h + "px",
       });
     }
-    dockBtn.textContent = ui.mode === "dock" ? "❐" : "⇤";
-    dockBtn.title = ui.mode === "dock" ? "Float window" : "Dock to left";
+    dockBtn.textContent = dockMode === "float" ? "⇤" : dockMode === "dock-left" ? "⇥" : "▣";
+    dockBtn.title = dockMode === "float" ? "Dock to left" : dockMode === "dock-left" ? "Dock to right" : "Float window";
   }
 
   function applyLauncherPosition() {
@@ -1893,7 +2066,11 @@ function createUI() {
   });
 
   win.querySelector(".sa-close").onclick = () => { ui.open = false; save(); apply(); };
-  dockBtn.onclick = () => { ui.mode = ui.mode === "dock" ? "float" : "dock"; save(); apply(); };
+  dockBtn.onclick = () => {
+    const mode = ui.mode === "dock" ? "dock-left" : ui.mode;
+    ui.mode = mode === "float" ? "dock-left" : mode === "dock-left" ? "dock-right" : "float";
+    save(); apply();
+  };
   addEventListener("resize", () => {
     apply();
     applyLauncherPosition();
@@ -1902,7 +2079,7 @@ function createUI() {
   // drag (float mode, or auto-undock when dragging header from dock mode)
   head.addEventListener("pointerdown", (e) => {
     if (e.target.closest("button")) return;
-    if (ui.mode === "dock") {
+    if (ui.mode === "dock" || ui.mode === "dock-left" || ui.mode === "dock-right") {
       ui.mode = "float";
       ui.w = clamp(ui.dockW, 320, innerWidth - 16);
       ui.x = clamp(e.clientX - 120, 0, innerWidth - ui.w);
@@ -1923,10 +2100,11 @@ function createUI() {
     head.addEventListener("pointerup", up);
   });
 
-  // resize grip (dock mode)
+  // Resize from the inner edge of the docked panel.
   grip.addEventListener("pointerdown", (e) => {
     grip.setPointerCapture(e.pointerId);
-    const move = (ev) => { ui.dockW = ev.clientX - DOCK_LEFT; apply(); };
+    const dockOnRight = ui.mode === "dock-right";
+    const move = (ev) => { ui.dockW = dockOnRight ? innerWidth - ev.clientX : ev.clientX - DOCK_LEFT; apply(); };
     const up = () => { grip.removeEventListener("pointermove", move); grip.removeEventListener("pointerup", up); save(); };
     grip.addEventListener("pointermove", move);
     grip.addEventListener("pointerup", up);
@@ -1952,4 +2130,3 @@ app.registerExtension({
     createUI();
   },
 });
-
