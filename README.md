@@ -2,7 +2,7 @@
 
 Nodex SuperAgent: an AI assistant inside ComfyUI, supporting local models (Ollama) and cloud APIs (NVIDIA NIM, Google Gemini, OpenAI). Floating chat window (or dock it to the left) with streaming responses.
 
-**Status:** Phase 1 (skeleton). Chat only. No tool calling or workflow execution yet.
+**Status:** Workflow orchestrator prototype. It plans a single generation run, routes to a declared skill, loads the selected ComfyUI visual graph onto the canvas, fills mapped inputs, queues it, and returns image/video outputs. Multi-step production pipelines remain future work.
 
 ## Requirements
 
@@ -39,6 +39,10 @@ ComfyUI-Nodex-SuperAgent/
 ├─ superagent/
 │  ├─ config.py         # config loader with defaults
 │  ├─ llm.py            # Ollama client: list, stream chat, unload
+│  ├─ catalog.py        # discovers bundled and saved ComfyUI visual workflows
+│  ├─ registry.py       # validates skill definitions and graph input bindings
+│  ├─ orchestrator.py   # ranks task/skill routes and explains the selected plan
+│  ├─ skills.json       # declarative skill capabilities, aliases, settings, and input mappings
 │  └─ routes.py         # /superagent/* HTTP endpoints
 └─ web/
    └─ superagent_panel.js    # floating / docked chat window
@@ -55,6 +59,21 @@ Nodex SuperAgent supports multiple LLM backends:
 5. **Custom / OpenAI-Compatible**: Any endpoint like Groq, OpenRouter, DeepSeek, vLLM, or LMStudio.
 
 > **💡 Low VRAM Tip:** If Ollama hits CUDA Out of Memory (OOM) because ComfyUI is using your GPU, click **⚙ (Settings)** in the panel header, select **NVIDIA NIM** or **Google Gemini**, enter your API key, and chat without using any local VRAM!
+
+## Workflow Orchestration
+
+The orchestrator uses ComfyUI **visual workflow graphs**. It loads the selected graph onto the canvas with ComfyUI's frontend, fills the declared prompt/image widgets, then queues the graph through the normal UI. It does not require converting visual workflows to API-format prompt graphs.
+
+The catalog scans this extension's `workflows/` folder and saved GUI workflows under `ComfyUI/user/<profile>/workflows/`. Skills in `superagent/skills.json` bind user language and aliases to exact workflow files and input selectors. A named workflow request is routed before generation; when the requested skill or workflow is unavailable, the active canvas is not used as a fallback.
+
+Routes included in this checkout:
+
+- Krea 2 text-to-image, landscape, portrait, and image-to-image using the bundled Krea graphs.
+- Qwen Image character-reference generation using the saved Qwen character-reference workflow.
+- LTX text-to-video and image-to-video using the saved LTX graphs. Video upload is not enabled, so video-edit/face-swap routes report that required input instead of queueing.
+- Qwen Image Edit and MiniMax are represented as routes but are **unavailable** until a matching visual workflow is saved and registered. The current saved Qwen graph is character-reference generation, not an edit graph; no MiniMax workflow was found.
+
+To add a route, save the ComfyUI visual workflow under a user `workflows/` directory, then add a skill entry in `superagent/skills.json` with aliases, task, exact `workflow_name`, and prompt/image selectors. Selector node IDs/titles and widget names must match the graph. Do not register a workflow as image editing unless it has a working image input wired into its graph.
 
 ## Configuration
 
@@ -78,9 +97,13 @@ You can configure settings directly inside ComfyUI by clicking the **⚙** butto
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/superagent/config` | Retrieve current configuration and provider presets |
-| POST | `/superagent/config` | Update and persist settings to `config.json` |
+| POST | `/superagent/config` | Update and persist settings to the ignored `config.local.json` |
 | GET | `/superagent/models` | List available models for the active provider |
-| POST | `/superagent/chat` | Stream chat. Body: `{model, messages, think?}`. NDJSON response |
+| GET | `/superagent/workflows` | List bundled/saved visual graphs and registered skills |
+| POST | `/superagent/plan` | Build a deterministic skill/workflow route from a user request |
+| POST | `/superagent/preflight` | Check machine/workflow readiness and return mode/resolution advice before queueing |
+| GET | `/superagent/workflow?id=...` | Return an exact cataloged GUI workflow graph for canvas loading |
+| POST | `/superagent/chat` | Stream chat. Body: `{model, messages, workflow_context}`. NDJSON response; API keys are never returned by config reads |
 | POST | `/superagent/unload` | Evict local model from memory (Ollama only) |
 
 ## Panel controls
@@ -92,6 +115,11 @@ You can configure settings directly inside ComfyUI by clicking the **⚙** butto
 - **Model dropdown:** select available models or enter a custom model
 - **Unload:** free the active local model from GPU VRAM/RAM (Ollama)
 - **Clear:** reset the conversation
+- **Generation**: the orchestrator loads the skill's visual graph, sets its declared inputs, queues it, tracks progress, and displays image/video outputs.
+- **Preflight adviser**: before generation, reports the selected workflow mode, its saved or requested resolution, installed model-file checks, GPU/VRAM and system RAM when available. It waits for the user's **Load workflow and queue** choice. Missing required workflow model files block queueing.
+- **Route feedback**: the panel shows which skill was selected and reports missing workflows/inputs. It never silently substitutes the active canvas for an unavailable named route.
+- **Image follow-ups**: a short continuation or edit can reuse the latest uploaded image; unrelated new generation requests do not send older image pixels back to the model.
+- **Skill routing**: the registry validates each skill against its saved graph and exposes route rationale, required inputs/model files, and ranked alternatives.
 - **Enter** sends, **Shift+Enter** adds a newline
 
 Window state (open/closed, mode, position, size) is remembered in the browser. Docked offsets are set by `DOCK_LEFT` and `DOCK_TOP` at the top of `web/superagent_panel.js`.
@@ -111,3 +139,4 @@ Check the CPU/GPU split with `ollama ps`, and speed with `ollama run <model> --v
 | Model list empty | Run `ollama list`; pull a model, or check API key in Settings (⚙) |
 | Very slow first reply | Local model is loading and splitting across CPU/GPU. Normal on 8 GB VRAM |
 | Panel loads but chat errors | Open browser dev console (F12) and ComfyUI console for the message |
+

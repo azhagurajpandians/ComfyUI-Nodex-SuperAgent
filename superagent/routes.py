@@ -1,5 +1,4 @@
 import base64
-import glob
 import json
 import mimetypes
 import os
@@ -8,7 +7,7 @@ import re
 from aiohttp import web
 from server import PromptServer
 
-from . import config, llm
+from . import catalog, config, llm, orchestrator, preflight, registry
 
 routes = PromptServer.instance.routes
 
@@ -37,18 +36,22 @@ def _find_image_path(name, subfolder=""):
         pass
 
     input_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "input"))
-    direct = os.path.join(input_dir, subfolder, name) if subfolder else os.path.join(input_dir, name)
-    if os.path.isfile(direct):
-        return direct
+    # Treat client-provided names as untrusted; every fallback resolution must stay
+    # inside ComfyUI's input directory.
+    requested = os.path.abspath(os.path.join(input_dir, subfolder, name))
+    try:
+        if os.path.commonpath([input_dir, requested]) == input_dir and os.path.isfile(requested):
+            return requested
+    except ValueError:
+        pass
 
-    direct_no_sub = os.path.join(input_dir, name)
-    if os.path.isfile(direct_no_sub):
-        return direct_no_sub
-
+    basename = os.path.basename(name)
+    if basename != name or not basename:
+        return None
     if os.path.isdir(input_dir):
         for root, _, files in os.walk(input_dir):
-            if name in files:
-                return os.path.join(root, name)
+            if basename in files:
+                return os.path.join(root, basename)
     return None
 
 
@@ -76,26 +79,20 @@ def _get_image_base64(filepath):
 
 
 def _scan_workflows():
-    workflows = {}
-    # Scan ComfyUI root directory for .json workflow files
-    if os.path.isdir(_COMFY_ROOT):
-        for f in glob.glob(os.path.join(_COMFY_ROOT, "*.json")):
-            base = os.path.splitext(os.path.basename(f))[0]
-            workflows[base] = f
+    return {item["id"]: item["path"] for item in catalog.list_workflows()}
 
-    # Scan internal workflows/ directory
-    if os.path.isdir(_WORKFLOWS_DIR):
-        for f in glob.glob(os.path.join(_WORKFLOWS_DIR, "*.json")):
-            base = os.path.splitext(os.path.basename(f))[0]
-            workflows[base] = f
-    return workflows
+
+def _public_config(cfg):
+    public_cfg = dict(cfg)
+    public_cfg["api_key"] = "" if not cfg.get("api_key") else "********"
+    return public_cfg
 
 
 @routes.get("/superagent/config")
 async def agent_get_config(request):
     cfg = config.load()
     presets = config.PROVIDER_PRESETS
-    return web.json_response({"config": cfg, "presets": presets})
+    return web.json_response({"config": _public_config(cfg), "presets": presets})
 
 
 @routes.post("/superagent/config")
@@ -106,7 +103,7 @@ async def agent_save_config(request):
         return _err("Invalid JSON body", 400)
 
     cfg = config.save(body)
-    return web.json_response({"ok": True, "config": cfg})
+    return web.json_response({"ok": True, "config": _public_config(cfg)})
 
 
 @routes.get("/superagent/models")
@@ -127,26 +124,44 @@ async def agent_models(request):
 
 @routes.get("/superagent/workflows")
 async def agent_list_workflows(request):
-    wfs = _scan_workflows()
-    return web.json_response({"workflows": list(wfs.keys())})
+    workflows = catalog.list_workflows()
+    public_workflows = [{k: v for k, v in item.items() if k != "path"} for item in workflows]
+    return web.json_response({"workflows": public_workflows, "skills": registry.list_skills()})
+
+
+@routes.post("/superagent/plan")
+async def agent_plan(request):
+    try:
+        body = await request.json()
+    except Exception:
+        return _err("Invalid JSON body", 400)
+    plan = orchestrator.plan_request(
+        body.get("request", ""),
+        has_image=bool(body.get("has_image")),
+        has_video=bool(body.get("has_video")),
+        active_workflow=body.get("active_workflow"),
+    )
+    return web.json_response({"plan": plan})
+
+
+@routes.post("/superagent/preflight")
+async def agent_preflight(request):
+    try:
+        body = await request.json()
+    except Exception:
+        return _err("Invalid JSON body", 400)
+    return web.json_response({"preflight": preflight.inspect(body.get("plan") or {}, body.get("request", ""))})
 
 
 @routes.get("/superagent/workflow")
 async def agent_get_workflow(request):
-    name = request.query.get("name", "").strip().lower()
-    wfs = _scan_workflows()
-    name_clean = name.lower()
-    name_norm = name_clean.replace(" ", "").replace("_", "").replace("-", "")
-    target_path = None
-    for k, p in wfs.items():
-        k_clean = k.lower()
-        k_norm = k_clean.replace(" ", "").replace("_", "").replace("-", "")
-        if k_clean == name_clean or name_clean in k_clean or name_norm in k_norm or k_norm in name_norm:
-            target_path = p
-            break
+    workflow_id = request.query.get("id", "").strip()
+    name = request.query.get("name", "").strip()
+    workflow = catalog.get_workflow(workflow_id=workflow_id or None, name=name or None)
+    target_path = workflow.get("path") if workflow else None
 
     if not target_path or not os.path.isfile(target_path):
-        return _err(f"Workflow '{name}' not found. Available: {list(wfs.keys())}", 404)
+        return _err(f"Workflow '{workflow_id or name}' not found or ambiguous.", 404)
 
     try:
         with open(target_path, "r", encoding="utf-8") as f:
@@ -180,9 +195,16 @@ async def agent_chat(request):
     body = await request.json()
     model = body.get("model") or cfg.get("default_model")
     system_prompt = cfg.get("system_prompt", config.AGENT_SYSTEM_PROMPT)
+    system_prompt += (
+        "\n\nEXECUTION TRUTH RULE: Never claim that ComfyUI is processing, queued, completed, or rendered an image/video. "
+        "Only the controller can report execution state, based on ComfyUI events and returned output files. "
+        "When a generation action is needed, emit the supported action tag and stop; do not simulate progress messages. "
+        "Routine, nonsexual edits such as changing the color of ordinary clothing are allowed image-edit requests. "
+        "Do not invent a safety concern unless the actual request or image gives a concrete reason."
+    )
 
     # Append available workflows list to context
-    wfs = list(_scan_workflows().keys())
+    wfs = [f"{item['name']} [{item['id']}]" for item in catalog.list_workflows()]
     if wfs:
         system_prompt += f"\n\n--- AVAILABLE WORKFLOW TEMPLATES ON SYSTEM ---\n{', '.join(wfs)}\n---------------------------------------------"
 
@@ -190,62 +212,90 @@ async def agent_chat(request):
     if workflow_context:
         system_prompt += f"\n\n--- ACTIVE COMFYUI CANVAS WORKFLOW ---\n{workflow_context}\n---------------------------------------"
 
+    plan = body.get("orchestration_plan") or {}
+    if plan.get("status") == "ready":
+        system_prompt += (
+            "\n\n--- ORCHESTRATOR ROUTE (AUTHORITATIVE) ---\n"
+            f"Selected skill: {plan.get('skill_name')} ({plan.get('task')}).\n"
+            f"Selected visual ComfyUI workflow: {plan.get('workflow_name')} [{plan.get('workflow_id')}].\n"
+            f"Why this route was selected: {plan.get('route_reason', '')}\n"
+            "The controller will load this GUI graph onto the canvas before queuing. Do not select or substitute another workflow.\n"
+            "This authoritative route overrides generic instructions to ask before generation. Do not ask a follow-up unless a required input is missing.\n"
+            "If the user explicitly requests generation, produce exactly one action in this format: "
+            f"<SUPERAGENT_ACTION>{{\"type\":\"{'edit_image' if plan.get('task') == 'image_edit' else 'run'}\",\"prompt\":\"complete positive prompt\",\"negative_prompt\":\"optional negative prompt\"}}</SUPERAGENT_ACTION>. "
+            "Use valid JSON string escaping. No action is allowed for prompt-only, description, or analysis requests.\n"
+            "------------------------------------------"
+        )
+        if plan.get("prompt_guidance"):
+            system_prompt += "\n\n--- SELECTED WORKFLOW PROMPT GUIDANCE ---\n" + plan["prompt_guidance"] + "\n----------------------------------------"
+    elif plan.get("status") in ("unavailable", "incompatible", "needs_choice"):
+        system_prompt += (
+            "\n\n--- ORCHESTRATOR ROUTE STATUS ---\n"
+            f"{plan.get('message') or plan.get('status')}\n"
+            "Do not emit any executable action tag and do not claim that generation was queued.\n"
+            "--------------------------------"
+        )
+    elif plan.get("status") == "needs_input":
+        system_prompt += f"\n\n--- ORCHESTRATOR NEEDS INPUT ---\n{plan.get('message')} Do not queue any workflow.\n--------------------------------"
+    elif plan.get("status") == "active_canvas":
+        system_prompt += (
+            "\n\n--- USER SELECTED THE ACTIVE CANVAS ---\n"
+            "The user explicitly asked to use/run the current canvas. The controller will execute it; do not claim progress or completion yourself.\n"
+            "---------------------------------------"
+        )
+
     raw_messages = body.get("messages", [])
-    has_attached_image = any(
-        msg.get("attachment") or "[Attached Image:" in str(msg.get("content", ""))
-        for msg in raw_messages
+    # Only attach pixels from the newest uploaded image set; prior messages remain text context.
+    latest_attachment_index = next(
+        (i for i in range(len(raw_messages) - 1, -1, -1)
+         if raw_messages[i].get("role") == "user" and (raw_messages[i].get("attachments") or raw_messages[i].get("attachment"))),
+        None,
     )
+    has_attached_image = latest_attachment_index is not None
     if has_attached_image:
         system_prompt += (
             "\n\n--- CRITICAL INSTRUCTION FOR ATTACHED IMAGES ---\n"
-            "An image is attached for analysis. You MUST inspect the visual elements, people, objects, clothing, and setting of the attached image!\n"
+            "One or more images are attached. Inspect them and use the user's requested edit as the primary instruction; do not invent an unrelated scene or replace the request with a generic description.\n"
             "DO NOT repeat, echo, or output the 'Previous Canvas Positive Prompt' from the ACTIVE COMFYUI CANVAS WORKFLOW above, as that is an old prompt from a past run.\n"
-            "Craft a fresh, original, highly detailed prompt describing what you actually see in the attached image.\n"
+            "Write a direct, concrete generation prompt describing only the requested change and the visual details needed to carry it out. Preserve unrelated image content.\n"
+            "If the latest user request explicitly asks to edit/transform this uploaded image and generate the result, "
+            "return one executable action using the action type and JSON format specified by the authoritative route above. "
+            "The prompt value must be valid JSON string content, describe the requested edit while preserving unrelated image content, "
+            "and contain no markdown fences. Do not emit this action for description or prompt-writing requests.\n"
             "------------------------------------------------"
         )
 
     formatted_messages = [{"role": "system", "content": system_prompt}]
     provider = llm.get_provider(cfg)
 
-    for msg in raw_messages:
+    for message_index, msg in enumerate(raw_messages):
         role = msg.get("role", "user")
         content = msg.get("content", "")
-        attachment = msg.get("attachment")
-
-        img_name = None
-        img_subfolder = ""
-        if isinstance(attachment, dict) and attachment.get("name"):
-            img_name = attachment.get("name")
-            img_subfolder = attachment.get("subfolder", "")
-        elif isinstance(content, str):
+        attachments = []
+        if message_index == latest_attachment_index:
+            attachments = msg.get("attachments") or ([msg.get("attachment")] if msg.get("attachment") else [])
+        if not attachments and message_index == latest_attachment_index and isinstance(content, str):
             m = re.search(r"\[Attached Image:\s*([^\]]+)\]", content)
             if m:
-                img_name = m.group(1).strip()
+                attachments = [{"name": m.group(1).strip()}]
 
-        if role == "user" and img_name:
-            img_path = _find_image_path(img_name, img_subfolder)
-            mime, b64 = _get_image_base64(img_path) if img_path else (None, None)
-            if b64:
-                if provider == "ollama":
-                    formatted_messages.append({
-                        "role": "user",
-                        "content": content,
-                        "images": [b64],
-                    })
-                else:
-                    formatted_messages.append({
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": content},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:{mime};base64,{b64}"
-                                }
-                            }
-                        ]
-                    })
-                continue
+        image_payloads = []
+        if role == "user":
+            for attachment in attachments:
+                if not isinstance(attachment, dict) or not attachment.get("name"):
+                    continue
+                img_path = _find_image_path(attachment.get("name"), attachment.get("subfolder", ""))
+                mime, b64 = _get_image_base64(img_path) if img_path else (None, None)
+                if b64:
+                    image_payloads.append((mime, b64))
+        if image_payloads:
+            if provider == "ollama":
+                formatted_messages.append({"role": "user", "content": content, "images": [b64 for _, b64 in image_payloads]})
+            else:
+                content_parts = [{"type": "text", "text": content}]
+                content_parts.extend({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}} for mime, b64 in image_payloads)
+                formatted_messages.append({"role": "user", "content": content_parts})
+            continue
 
         formatted_messages.append({"role": role, "content": content})
 
@@ -281,3 +331,4 @@ async def agent_chat(request):
     except ConnectionResetError:
         pass
     return resp
+
