@@ -113,6 +113,23 @@ class TestRoutes(unittest.TestCase):
         self.assertEqual(plan["max_images"], 2)
         self.assertEqual(len(plan["image_selectors"]), 2)
 
+    def test_edit_with_hd_resolution_still_routes_and_applies_resolution(self):
+        request = "make the boy sit in a movie theater watching a Spider-Man movie, HD resolution, use Krea edit"
+        plan = orchestrator.plan_request(request, has_image=True)
+        self.assertEqual(plan["status"], "ready")
+        self.assertEqual(plan["intent"], "image_edit")
+        self.assertEqual(plan["skill_id"], "krea2_i2i")
+        self.assertEqual(plan["workflow_name"], "template_krea2_identity_edit")
+        resolution = preflight._resolution_for({}, plan["task"], request)
+        self.assertEqual((resolution["width"], resolution["height"]), (1280, 720))
+        self.assertTrue(resolution["apply"])
+
+    def test_common_generate_typo_routes_to_image_workflow(self):
+        plan = orchestrator.plan_request("gneratea image of boy playing in the park")
+        self.assertEqual(plan["status"], "ready")
+        self.assertEqual(plan["intent"], "text_to_image")
+        self.assertEqual(plan["skill_id"], "krea2_t2i")
+
     def test_qwen_character_reference_is_not_claimed_as_edit(self):
         plan = orchestrator.plan_request("Create a character sheet with Qwen Image", has_image=True)
         self.assertEqual(plan["status"], "ready")
