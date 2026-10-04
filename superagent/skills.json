@@ -1,0 +1,324 @@
+[
+  {
+    "id": "krea2_t2i",
+    "name": "Krea 2 text-to-image",
+    "aliases": [
+      "krea",
+      "krea 2",
+      "krea2",
+      "krea 2 turbo"
+    ],
+    "task": "text_to_image",
+    "default": true,
+    "mode_recommendation": "Krea 2 Turbo text-to-image; this workflow's graph defines the sampler and model settings.",
+    "resolution": {
+      "width": 1024,
+      "height": 1024,
+      "reason": "Krea 2 standard square preset."
+    },
+    "workflow_name": "template_krea2_t2i",
+    "prompt_selector": {
+      "node_type": "CLIPTextEncode",
+      "widget": "text",
+      "index": 0
+    },
+    "negative_prompt_selector": {
+      "node_type": "CLIPTextEncode",
+      "widget": "text",
+      "index": 1
+    },
+    "image_selector": null
+  },
+  {
+    "id": "krea2_landscape",
+    "name": "Krea 2 landscape 16:9",
+    "aliases": [
+      "krea landscape",
+      "krea 16:9",
+      "krea widescreen"
+    ],
+    "task": "text_to_image",
+    "mode_recommendation": "Krea 2 Turbo text-to-image, landscape composition.",
+    "resolution": {
+      "width": 1024,
+      "height": 576,
+      "reason": "The selected Krea landscape template is designed for 16:9."
+    },
+    "workflow_name": "template_krea2_landscape_16x9",
+    "prompt_selector": {
+      "node_type": "CLIPTextEncode",
+      "widget": "text",
+      "index": 0
+    },
+    "negative_prompt_selector": {
+      "node_type": "CLIPTextEncode",
+      "widget": "text",
+      "index": 1
+    },
+    "image_selector": null
+  },
+  {
+    "id": "krea2_portrait",
+    "name": "Krea 2 portrait 9:16",
+    "aliases": [
+      "krea portrait",
+      "krea 9:16"
+    ],
+    "task": "text_to_image",
+    "mode_recommendation": "Krea 2 Turbo text-to-image, portrait composition.",
+    "resolution": {
+      "width": 576,
+      "height": 1024,
+      "reason": "The selected Krea portrait template is designed for 9:16."
+    },
+    "workflow_name": "template_krea2_portrait_9x16",
+    "prompt_selector": {
+      "node_type": "CLIPTextEncode",
+      "widget": "text",
+      "index": 0
+    },
+    "negative_prompt_selector": {
+      "node_type": "CLIPTextEncode",
+      "widget": "text",
+      "index": 1
+    },
+    "image_selector": null
+  },
+  {
+    "id": "krea2_i2i",
+    "name": "Krea 2 image-to-image",
+    "aliases": [
+      "krea image edit",
+      "krea edit",
+      "krea image to image",
+      "krea identity edit",
+      "krea identity"
+    ],
+    "task": "image_edit",
+    "default": true,
+    "mode_recommendation": "Krea 2 Identity Edit; image 1 is the image to edit and image 2 is the optional identity/person reference.",
+    "workflow_name": "template_krea2_identity_edit",
+    "prompt_selector": {
+      "node_type": "Krea2EditGroundedEncode",
+      "widget": "prompt",
+      "index": 0
+    },
+    "negative_prompt_selector": {
+      "node_type": "Krea2EditGroundedEncode",
+      "widget": "prompt",
+      "index": 1
+    },
+    "image_selector": {
+      "node_type": "LoadImage",
+      "widget": "image",
+      "index": 0
+    },
+    "lora_selector": {
+      "node_type": "LoraLoaderModelOnly",
+      "widget": "lora_name",
+      "index": 0
+    },
+    "lora_name": "Krea2/krea2_identity_edit_v1_2.safetensors",
+    "lora_required": true,
+    "lora_strength": 1.0,
+    "image_selectors": [
+      {
+        "node_type": "LoadImage",
+        "widget": "image",
+        "index": 0
+      },
+      {
+        "node_type": "LoadImage",
+        "widget": "image",
+        "index": 1
+      }
+    ],
+    "max_images": 2,
+    "detach_unused_image_inputs": false,
+    "prompt_guidance": "Describe the requested edit precisely. Image 1 is the image to edit; image 2, if supplied, is the identity/person reference. Preserve other scene content and exact identity. For image edits, tell what to change and what must remain unchanged."
+  },
+  {
+    "id": "qwen_image_edit",
+    "name": "Qwen Image Edit",
+    "aliases": [
+      "qwen image edit",
+      "qwen edit",
+      "qwen image",
+      "qwen image 2.1 edit",
+      "qwen 2.1 edit"
+    ],
+    "task": "image_edit",
+    "mode_recommendation": "Qwen Image Edit workflow (available only when a matching saved graph is installed).",
+    "prompt_selector": {
+      "node_type": "TextEncodeQwenImage21",
+      "widget": "prompt"
+    },
+    "image_selector": {
+      "node_type": "LoadImage",
+      "widget": "image",
+      "index": 0
+    },
+    "workflow_name": "template_qwen_image_2_1_edit",
+    "negative_prompt_selector": {
+      "node_type": "TextEncodeQwenImage21",
+      "widget": "negative_prompt"
+    },
+    "image_selectors": [
+      {
+        "node_type": "LoadImage",
+        "widget": "image",
+        "index": 0
+      },
+      {
+        "node_type": "LoadImage",
+        "widget": "image",
+        "index": 1
+      },
+      {
+        "node_type": "LoadImage",
+        "widget": "image",
+        "index": 2
+      },
+      {
+        "node_type": "LoadImage",
+        "widget": "image",
+        "index": 3
+      },
+      {
+        "node_type": "LoadImage",
+        "widget": "image",
+        "index": 4
+      },
+      {
+        "node_type": "LoadImage",
+        "widget": "image",
+        "index": 5
+      },
+      {
+        "node_type": "LoadImage",
+        "widget": "image",
+        "index": 6
+      },
+      {
+        "node_type": "LoadImage",
+        "widget": "image",
+        "index": 7
+      },
+      {
+        "node_type": "LoadImage",
+        "widget": "image",
+        "index": 8
+      },
+      {
+        "node_type": "LoadImage",
+        "widget": "image",
+        "index": 9
+      }
+    ],
+    "max_images": 10,
+    "detach_unused_image_inputs": true,
+    "prompt_guidance": "Use <image1> as the image to edit and <image2> through <image10> as references in upload order. State each reference role explicitly; describe the exact change and preserve all unrelated subjects, composition, lighting, and details."
+  },
+  {
+    "id": "qwen_character_reference",
+    "name": "Qwen Image character-reference generation",
+    "aliases": [
+      "qwen image",
+      "qwen image 2.1",
+      "qwen character reference"
+    ],
+    "task": "image_with_references",
+    "mode_recommendation": "Qwen Image character-reference generation using the saved reference graph.",
+    "workflow_name": "image_qwen_image_2_1_chaacter ref",
+    "prompt_selector": {
+      "node_type": "TextEncodeQwenImage21",
+      "widget": "prompt"
+    },
+    "image_selector": {
+      "node_type": "LoadImage",
+      "widget": "image",
+      "index": 0
+    }
+  },
+  {
+    "id": "ltx_t2v",
+    "name": "LTX text-to-video",
+    "aliases": [
+      "ltx",
+      "ltx video",
+      "ltx t2v",
+      "ltx text to video",
+      "ltx 2.3"
+    ],
+    "task": "text_to_video",
+    "default": true,
+    "mode_recommendation": "LTX text-to-video; preserve the saved workflow's frame count, resolution and sampling configuration.",
+    "workflow_name": "video_ltx2_3_t2v",
+    "prompt_selector": {
+      "node_id": "358",
+      "widget": "text"
+    },
+    "image_selector": null
+  },
+  {
+    "id": "ltx_i2v",
+    "name": "LTX image-to-video",
+    "aliases": [
+      "ltx image to video",
+      "ltx i2v",
+      "animate image with ltx"
+    ],
+    "task": "image_to_video",
+    "mode_recommendation": "LTX image-to-video; preserve the saved workflow's motion and frame settings.",
+    "workflow_name": "LTX_I2V_NODEX",
+    "prompt_selector": {
+      "node_title": "Video Prompt",
+      "widget": "text"
+    },
+    "image_selector": {
+      "node_type": "LoadImage",
+      "widget": "image",
+      "index": 0
+    }
+  },
+  {
+    "id": "ltx_video_edit",
+    "name": "LTX reference-video edit",
+    "aliases": [
+      "ltx video edit",
+      "ltx ripple edit",
+      "ltx face swap"
+    ],
+    "task": "video_edit",
+    "workflow_name": "LTX_Ripple_FFAF_Edit_v11_apiu",
+    "requires_video_upload": true,
+    "prompt_selector": {
+      "node_id": "814",
+      "widget": "text"
+    },
+    "image_selector": {
+      "node_type": "LoadImage",
+      "widget": "image",
+      "index": 0
+    }
+  },
+  {
+    "id": "minimax_video",
+    "name": "MiniMax video",
+    "aliases": [
+      "minimax",
+      "mini max",
+      "minimax video",
+      "hailuo"
+    ],
+    "task": "text_to_video",
+    "workflow_pattern": "minimax|hailuo",
+    "prompt_selector": {
+      "node_type": "CLIPTextEncode",
+      "node_title": "Positive Prompt",
+      "widget": "text"
+    },
+    "image_selector": null
+  }
+]
+
