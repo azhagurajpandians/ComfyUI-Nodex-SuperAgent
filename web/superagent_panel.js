@@ -2,6 +2,7 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 const STORE = "nodex_superagent_ui";
+let latestGeneratedImage = null;
 const DOCK_LEFT = 56; // px: clears ComfyUI's left sidebar icon bar
 const DOCK_TOP = 48; // px: clears ComfyUI's top bar
 
@@ -95,6 +96,7 @@ const css = `
 .ca-img-gallery{display:flex;flex-direction:column;gap:8px;margin-top:8px}
 .ca-img-card{border-radius:6px;overflow:hidden;border:1px solid #444;background:#161616}
 .ca-output-img{width:100%;max-height:360px;object-fit:contain;display:block;cursor:pointer;background:#111;transition:opacity 0.15s ease}
+.ca-output-video{width:100%;max-height:360px;display:block;background:#111}
 .ca-output-img:hover{opacity:0.92}
 .ca-img-meta{display:flex;justify-content:space-between;align-items:center;padding:4px 8px;font-size:11px;color:#aaa;background:#222}
 .ca-img-btn{background:#333;color:#eee;border:1px solid #555;border-radius:3px;padding:2px 7px;font-size:11px;cursor:pointer}
@@ -108,9 +110,10 @@ const css = `
 /* Image Upload & Preview */
 .ca-upload-btn{background:#333;color:#eee;border:1px solid #555;border-radius:4px;padding:0 8px;cursor:pointer;font-size:13px}
 .ca-upload-btn:hover{background:#444}
-.ca-img-preview-box{display:none;align-items:center;gap:8px;padding:4px 8px;background:#181818;border-top:1px solid #333;font-size:11px;color:#aaa}
+.ca-img-preview-box{display:none;flex-wrap:wrap;gap:6px;padding:6px 8px;background:#181818;border-top:1px solid #333;font-size:11px;color:#aaa}
+.ca-attachment-chip{display:flex;align-items:center;gap:5px;max-width:180px;padding:3px 5px;background:#242424;border:1px solid #444;border-radius:5px}
 .ca-img-preview-thumb{width:28px;height:28px;object-fit:cover;border-radius:3px;border:1px solid #555}
-.ca-img-preview-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ca-img-preview-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ca-img-preview-rm{cursor:pointer;color:#f85149;font-weight:700;padding:0 4px}
 
 
@@ -190,6 +193,131 @@ function setNodePromptText(node, text) {
   return false;
 }
 
+function setWorkflowImage(filename) {
+  const imageNode = (app.graph?._nodes || []).find((node) => node.type === "LoadImage");
+  const widget = imageNode?.widgets?.find((item) => item.name === "image") || imageNode?.widgets?.[0];
+  if (!widget || !filename) return false;
+  widget.value = filename;
+  if (widget.callback) widget.callback(filename);
+  imageNode.setDirtyCanvas?.(true, true);
+  app.graph?.setDirtyCanvas(true, true);
+  return true;
+}
+
+function setWorkflowValue(selector, value) {
+  if (!selector || value == null || value === "") return false;
+  const nodes = app.graph?._nodes || [];
+  const matches = nodes.filter((node) => {
+    if (selector.node_id != null && String(node.id) !== String(selector.node_id)) return false;
+    if (selector.node_type && node.type !== selector.node_type) return false;
+    if (selector.node_title) {
+      const titles = [node.title, node.properties?.["Node name for S&R"]].filter(Boolean);
+      if (!titles.some((title) => title.toLowerCase() === selector.node_title.toLowerCase())) return false;
+    }
+    return true;
+  });
+  const node = matches[selector.index || 0];
+  const widget = node?.widgets?.find((item) => item.name === selector.widget) ||
+    (selector.widget ? null : node?.widgets?.[0]);
+  if (!widget) return false;
+  widget.value = value;
+  if (widget.callback) widget.callback(value);
+  node.setDirtyCanvas?.(true, true);
+  app.graph?.setDirtyCanvas(true, true);
+  return true;
+}
+
+function findWorkflowNodes(selector) {
+  if (!selector) return [];
+  return (app.graph?._nodes || []).filter((node) => {
+    if (selector.node_id != null && String(node.id) !== String(selector.node_id)) return false;
+    if (selector.node_type && node.type !== selector.node_type) return false;
+    if (selector.node_title) {
+      const titles = [node.title, node.properties?.["Node name for S&R"]].filter(Boolean);
+      if (!titles.some((title) => title.toLowerCase() === selector.node_title.toLowerCase())) return false;
+    }
+    return true;
+  });
+}
+
+function configureOptionalImageLinks(plan, selectedCount) {
+  if (!plan.detach_unused_image_inputs || !app.graph) return;
+  const graph = app.graph;
+  graph.__nodexImageLinks ||= {};
+  (plan.image_selectors || []).forEach((selector, index) => {
+    const node = findWorkflowNodes(selector)[selector.index || 0];
+    const imageInputName = `image_${index + 1}`;
+    const input = node?.inputs?.find((item) => item.name === imageInputName || item.name.endsWith(`.${imageInputName}`) || item.name === "image");
+    if (!node || !input) return;
+    const key = `${node.id}:${input.name}`;
+    if (index < selectedCount) {
+      const saved = graph.__nodexImageLinks[key];
+      if (saved && input.link == null) {
+        graph.connect(saved.origin_id, saved.origin_slot, node.id, saved.target_slot);
+      }
+      return;
+    }
+    if (input.link != null) {
+      const link = graph.links?.[input.link];
+      if (link) {
+        graph.__nodexImageLinks[key] = {
+          origin_id: link.origin_id ?? link[1],
+          origin_slot: link.origin_slot ?? link[2],
+          target_slot: link.target_slot ?? link[4],
+        };
+        graph.removeLink(input.link);
+      }
+    }
+  });
+  graph.setDirtyCanvas?.(true, true);
+}
+
+function applyOrchestrationInputs(plan, action, attachments) {
+  attachments = Array.isArray(attachments) ? attachments : (attachments ? [attachments] : []);
+  if (!setWorkflowValue(plan.prompt_selector, action.prompt)) {
+    return { ok: false, error: `Prompt input was not found for ${plan.skill_name}.` };
+  }
+  if (action.negative_prompt && plan.negative_prompt_selector) {
+    setWorkflowValue(plan.negative_prompt_selector, action.negative_prompt);
+  }
+  if (plan.image_selector) {
+    if (!attachments[0]?.name) return { ok: false, error: `${plan.skill_name} requires an attached image.` };
+    const selectors = plan.image_selectors?.length ? plan.image_selectors : [plan.image_selector];
+    if (attachments.length > selectors.length) return { ok: false, error: `${plan.skill_name} accepts up to ${selectors.length} images.` };
+    configureOptionalImageLinks(plan, attachments.length);
+    for (let i = 0; i < attachments.length; i++) {
+      if (!setWorkflowValue(selectors[i], attachments[i].name)) {
+        return { ok: false, error: `Image ${i + 1} input was not found for ${plan.skill_name}.` };
+      }
+    }
+    if (plan.skill_id === "krea2_i2i") {
+      const nodes = findWorkflowNodes({ node_type: "LoadImage" });
+      if (nodes[1]) {
+        // The shipped Krea Identity Edit graph keeps its optional second
+        // reference group bypassed by default. Enable it only when present.
+        nodes[1].mode = attachments.length > 1 ? 0 : 4;
+        nodes[1].setDirtyCanvas?.(true, true);
+      }
+    }
+  }
+  if (plan.lora_required) {
+    if (!plan.selected_lora) return { ok: false, error: "Choose the Krea identity LoRA that matches the person in the image." };
+    if (!setWorkflowValue(plan.lora_selector, plan.selected_lora)) return { ok: false, error: "The selected identity LoRA input was not found in the workflow." };
+    const loraNode = (app.graph?._nodes || []).find((node) => node.type === "LoraLoaderModelOnly");
+    const strength = loraNode?.widgets?.find((widget) => widget.name === "strength_model");
+    if (strength && plan.lora_strength != null) {
+      strength.value = Number(plan.lora_strength);
+      if (strength.callback) strength.callback(strength.value);
+    }
+  }
+  if (plan.denoise != null) {
+    const sampler = (app.graph?._nodes || []).find((node) => node.type === "KSampler");
+    const denoise = sampler?.widgets?.find((widget) => widget.name === "denoise");
+    if (denoise) { denoise.value = Number(plan.denoise); denoise.callback?.(denoise.value); }
+  }
+  return { ok: true };
+}
+
 // Helper: Map aspect ratio text to known combo values
 function resolveAspectRatioCombo(options, req) {
   if (!options || !Array.isArray(options) || !req) return null;
@@ -246,7 +374,11 @@ function setCanvasResolution(width, height, aspect) {
   let hVal = height ? parseInt(height, 10) : null;
 
   if ((!wVal || !hVal) && reqAspect) {
-    if (reqAspect.includes("16:9") || reqAspect.includes("landscape") || reqAspect.includes("wide")) {
+    if (reqAspect.includes("full hd") || reqAspect.includes("1080p")) {
+      wVal = 1920; hVal = 1080; reqAspect = "16:9";
+    } else if (reqAspect === "hd" || reqAspect.includes("720p")) {
+      wVal = 1280; hVal = 720; reqAspect = "16:9";
+    } else if (reqAspect.includes("16:9") || reqAspect.includes("landscape") || reqAspect.includes("wide")) {
       wVal = 1024; hVal = 576; reqAspect = "16:9";
     } else if (reqAspect.includes("9:16") || reqAspect.includes("portrait")) {
       wVal = 576; hVal = 1024; reqAspect = "9:16";
@@ -415,24 +547,49 @@ function getWorkflowContext() {
 // Helper: Render generated images directly inside the chat log
 function renderGeneratedImages(images, targetEl) {
   if (!targetEl || !images || images.length === 0) return;
+  const lastImage = [...images].reverse().find((item) => item.filename && !item._mediaType?.includes("video"));
+  if (lastImage) latestGeneratedImage = { filename: lastImage.filename, subfolder: lastImage.subfolder || "", type: lastImage.type || "output" };
   const container = document.createElement("div");
   container.className = "ca-img-gallery";
   for (const img of images) {
     const url = `/view?filename=${encodeURIComponent(img.filename)}&subfolder=${encodeURIComponent(img.subfolder || "")}&type=${encodeURIComponent(img.type || "output")}`;
     const imgWrapper = document.createElement("div");
     imgWrapper.className = "ca-img-card";
-    imgWrapper.innerHTML = `
-      <a href="${url}" target="_blank" title="Click to view full size in new tab">
-        <img src="${url}" alt="Generated image" class="ca-output-img" />
-      </a>
-      <div class="ca-img-meta">
-        <span>${img.filename}</span>
-        <button class="ca-img-btn" title="Open full resolution">Open</button>
-      </div>`;
-    imgWrapper.querySelector(".ca-img-btn").onclick = (e) => {
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.title = "Open full-size result";
+    const isVideo = img._mediaType === "videos" || /\.(mp4|webm|mov|m4v)$/i.test(img.filename || "");
+    if (isVideo) {
+      const video = document.createElement("video");
+      video.src = url;
+      video.controls = true;
+      video.className = "ca-output-video";
+      link.appendChild(video);
+    } else {
+      const image = document.createElement("img");
+      image.src = url;
+      image.alt = "Generated image";
+      image.className = "ca-output-img";
+      link.appendChild(image);
+    }
+    imgWrapper.appendChild(link);
+    const meta = document.createElement("div");
+    meta.className = "ca-img-meta";
+    const filename = document.createElement("span");
+    filename.textContent = img.filename || "Generated output";
+    meta.appendChild(filename);
+    const open = document.createElement("button");
+    open.className = "ca-img-btn";
+    open.textContent = "Open";
+    open.title = "Open full resolution";
+    open.onclick = (e) => {
       e.preventDefault();
       window.open(url, "_blank");
     };
+    meta.appendChild(open);
+    imgWrapper.appendChild(meta);
     container.appendChild(imgWrapper);
   }
   targetEl.innerHTML = "";
@@ -440,10 +597,27 @@ function renderGeneratedImages(images, targetEl) {
   targetEl.scrollIntoView({ behavior: "smooth" });
 }
 
+async function copyGeneratedImageToInput(output) {
+  if (!output?.filename) return null;
+  const query = new URLSearchParams({ filename: output.filename, subfolder: output.subfolder || "", type: output.type || "output" });
+  const imageResponse = await fetch(`/view?${query}`);
+  if (!imageResponse.ok) throw new Error("Could not read the previous generated image from ComfyUI output.");
+  const form = new FormData();
+  form.append("image", await imageResponse.blob(), output.filename);
+  form.append("type", "input");
+  form.append("overwrite", "true");
+  const uploadResponse = await fetch("/upload/image", { method: "POST", body: form });
+  const uploaded = await uploadResponse.json();
+  if (!uploadResponse.ok || !uploaded.name) throw new Error(uploaded.error || "Could not reuse the previous generated image as an edit input.");
+  return { name: uploaded.name, subfolder: uploaded.subfolder || "", type: "input" };
+}
+
 // Helper: Load a workflow JSON by name into ComfyUI canvas
 async function loadWorkflowByName(name) {
   try {
-    const res = await fetch(`/superagent/workflow?name=${encodeURIComponent(name)}`);
+    const key = String(name || "");
+    const query = key.includes(":") ? `id=${encodeURIComponent(key)}` : `name=${encodeURIComponent(key)}`;
+    const res = await fetch(`/superagent/workflow?${query}`);
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Workflow not found");
     if (data && typeof data === "object") {
@@ -542,8 +716,12 @@ function executeGeneration(promptText, statusEl) {
 
     const onExecuted = (e) => {
       const output = e.detail?.output;
-      if (output && output.images && output.images.length > 0) {
-        imagesFound = imagesFound.concat(output.images);
+      if (output) {
+        for (const key of ["images", "gifs", "videos"]) {
+          if (Array.isArray(output[key])) {
+            imagesFound = imagesFound.concat(output[key].map((item) => ({ ...item, _mediaType: key })));
+          }
+        }
       }
     };
 
@@ -630,14 +808,10 @@ function buildPanel(root, settingsBtn) {
         <button class="ca-clear" title="Clear chat">Clear</button>
       </div>
       <div class="ca-log"></div>
-      <div class="ca-img-preview-box">
-        <img class="ca-img-preview-thumb" src="" alt="preview" />
-        <span class="ca-img-preview-name"></span>
-        <span class="ca-img-preview-rm" title="Remove attachment">✕</span>
-      </div>
+      <div class="ca-img-preview-box"></div>
       <div class="ca-in">
-        <input type="file" class="ca-file-input" accept="image/*" style="display:none">
-        <button class="ca-upload-btn" title="Upload image (Load onto canvas / send to vision)">📷</button>
+        <input type="file" class="ca-file-input" accept="image/*" multiple style="display:none">
+        <button class="ca-upload-btn" title="Upload images (Krea Identity Edit: up to 2; Qwen Image 2.1: up to 10)">📷+</button>
         <textarea class="ca-text" placeholder="Message or ask to generate an image... (Enter = send, Shift+Enter = newline)"></textarea>
         <button class="ca-send">Send</button>
       </div>
@@ -703,10 +877,12 @@ function buildPanel(root, settingsBtn) {
   const log = $(".ca-log"), sel = $(".ca-model"), box = $(".ca-text"), sendBtn = $(".ca-send");
   const provBadge = $(".ca-prov-badge"), unloadBtn = $(".ca-unload"), wfSel = $(".ca-workflow");
   const templateBtn = $(".ca-browse-templates"), uploadBtn = $(".ca-upload-btn"), fileInput = $(".ca-file-input");
-  const previewBox = $(".ca-img-preview-box"), previewThumb = $(".ca-img-preview-thumb"), previewName = $(".ca-img-preview-name"), previewRm = $(".ca-img-preview-rm");
+  const previewBox = $(".ca-img-preview-box");
   const cfgOptions = $(".sa-cfg-options");
 
-  let currentAttachment = null;
+  let currentAttachments = [];
+  let workflowCatalog = [];
+  let availableSkills = [];
 
   // Settings inputs
   const cfgProv = $(".sa-cfg-provider"), cfgKey = $(".sa-cfg-key"), cfgUrl = $(".sa-cfg-url");
@@ -754,7 +930,8 @@ function buildPanel(root, settingsBtn) {
       activeConfig = data.config || {};
       const p = activeConfig.provider || "ollama";
       cfgProv.value = p;
-      cfgKey.value = activeConfig.api_key || "";
+      cfgKey.value = activeConfig.api_key === "********" ? "" : (activeConfig.api_key || "");
+      cfgKey.placeholder = activeConfig.api_key === "********" ? "Saved key kept when blank; enter to replace" : "API key";
       cfgUrl.value = activeConfig.base_url || activeConfig.ollama_host || (PROVIDER_INFO[p] && PROVIDER_INFO[p].default_url) || "";
       cfgModel.value = activeConfig.default_model || "";
       cfgTemp.value = activeConfig.temperature != null ? activeConfig.temperature : 0.4;
@@ -782,7 +959,6 @@ function buildPanel(root, settingsBtn) {
       const p = cfgProv.value;
       const payload = {
         provider: p,
-        api_key: cfgKey.value.trim(),
         base_url: cfgUrl.value.trim(),
         ollama_host: p === "ollama" ? cfgUrl.value.trim() : (activeConfig.ollama_host || "http://127.0.0.1:11434"),
         default_model: cfgModel.value.trim(),
@@ -791,6 +967,8 @@ function buildPanel(root, settingsBtn) {
         interactive_options: cfgOptions.checked,
         system_prompt: cfgPrompt.value.trim(),
       };
+      // An empty password field means "keep the saved key"; keys are never returned to the browser.
+      if (cfgKey.value.trim()) payload.api_key = cfgKey.value.trim();
       const res = await fetch("/superagent/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -824,50 +1002,78 @@ function buildPanel(root, settingsBtn) {
   // Image Upload Handling
   uploadBtn.onclick = () => fileInput.click();
 
+  const renderAttachmentPreview = () => {
+    previewBox.replaceChildren();
+    previewBox.style.display = currentAttachments.length ? "flex" : "none";
+    currentAttachments.forEach((attachment, index) => {
+      const chip = document.createElement("div");
+      chip.className = "ca-attachment-chip";
+      const thumb = document.createElement("img");
+      thumb.className = "ca-img-preview-thumb";
+      thumb.src = attachment.url;
+      thumb.alt = `Image ${index + 1}`;
+      const name = document.createElement("span");
+      name.className = "ca-img-preview-name";
+      name.textContent = `${index + 1}. ${attachment.name}`;
+      name.title = attachment.name;
+      const remove = document.createElement("button");
+      remove.className = "ca-img-preview-rm";
+      remove.type = "button";
+      remove.textContent = "×";
+      remove.title = `Remove image ${index + 1}`;
+      remove.onclick = () => {
+        currentAttachments.splice(index, 1);
+        renderAttachmentPreview();
+      };
+      chip.append(thumb, name, remove);
+      previewBox.appendChild(chip);
+    });
+  };
+
   fileInput.onchange = async () => {
-    const file = fileInput.files?.[0];
-    if (!file) return;
+    const files = Array.from(fileInput.files || []);
+    if (!files.length) return;
+    if (currentAttachments.length + files.length > 10) {
+      add("ca-err", `You can attach up to 10 images in one message. Remove ${currentAttachments.length + files.length - 10} image(s) and try again.`);
+      fileInput.value = "";
+      return;
+    }
     try {
       uploadBtn.textContent = "⏳";
-      const formData = new FormData();
-      formData.append("image", file);
-      formData.append("overwrite", "true");
-      const res = await fetch("/upload/image", { method: "POST", body: formData });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Upload failed");
-
-      currentAttachment = {
-        name: data.name,
-        subfolder: data.subfolder || "",
-        type: data.type || "input",
-        url: `/view?filename=${encodeURIComponent(data.name)}&subfolder=${encodeURIComponent(data.subfolder || "")}&type=${encodeURIComponent(data.type || "input")}`,
-      };
-
-      previewThumb.src = currentAttachment.url;
-      previewName.textContent = data.name;
-      previewBox.style.display = "flex";
-
-      // If active canvas has a LoadImage node, update it immediately
-      const imgNode = app.graph?._nodes?.find((n) => n.type === "LoadImage");
-      if (imgNode) {
-        const widget = imgNode.widgets?.find((w) => w.name === "image");
-        if (widget) {
-          widget.value = data.name;
-          app.graph.setDirtyCanvas(true, true);
-          add("ca-bot", `📷 Uploaded "${data.name}" and loaded into canvas LoadImage node.`);
-        }
+      for (const file of files) {
+        const formData = new FormData();
+        formData.append("image", file);
+        formData.append("overwrite", "true");
+        const res = await fetch("/upload/image", { method: "POST", body: formData });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || `Upload failed for ${file.name}`);
+        currentAttachments.push({
+          name: data.name,
+          subfolder: data.subfolder || "",
+          type: data.type || "input",
+          url: `/view?filename=${encodeURIComponent(data.name)}&subfolder=${encodeURIComponent(data.subfolder || "")}&type=${encodeURIComponent(data.type || "input")}`,
+        });
       }
+      renderAttachmentPreview();
+
+      // Populate active canvas LoadImage nodes in upload order for direct editing.
+      const imageNodes = (app.graph?._nodes || []).filter((node) => node.type === "LoadImage");
+      currentAttachments.forEach((attachment, index) => {
+        const node = imageNodes[index];
+        const widget = node?.widgets?.find((item) => item.name === "image") || node?.widgets?.[0];
+        if (widget) {
+          widget.value = attachment.name;
+          widget.callback?.(attachment.name);
+          node.setDirtyCanvas?.(true, true);
+        }
+      });
+      if (files.length) add("ca-bot", `📷 Uploaded ${files.length} image${files.length === 1 ? "" : "s"}; the selected order is preserved.`);
     } catch (err) {
       alert("Image upload failed: " + err.message);
     } finally {
-      uploadBtn.textContent = "📷";
+      uploadBtn.textContent = "📷+";
       fileInput.value = "";
     }
-  };
-
-  previewRm.onclick = () => {
-    currentAttachment = null;
-    previewBox.style.display = "none";
   };
 
   async function loadModels() {
@@ -924,12 +1130,13 @@ function buildPanel(root, settingsBtn) {
       const res = await fetch("/superagent/workflows");
       const data = await res.json();
       if (!res.ok) return;
-      const wfs = data.workflows || [];
-      let html = `<option value="">📁 Workflow: (Active Canvas)</option>`;
-      for (const w of wfs) {
-        html += `<option value="${w}">${w}</option>`;
+      workflowCatalog = data.workflows || [];
+      availableSkills = data.skills || [];
+      wfSel.replaceChildren(new Option("📁 Workflow: (Active Canvas)", ""));
+      for (const workflow of workflowCatalog) {
+        const option = new Option(`${workflow.name} · ${workflow.source}`, workflow.id);
+        wfSel.appendChild(option);
       }
-      wfSel.innerHTML = html;
     } catch (e) {
       console.warn("Failed to load workflow list:", e);
     }
@@ -948,41 +1155,44 @@ function buildPanel(root, settingsBtn) {
 
   async function send() {
     const text = box.value.trim();
-    if ((!text && !currentAttachment) || busy) return;
+    if ((!text && !currentAttachments.length) || busy) return;
     busy = true; sendBtn.disabled = true; box.value = "";
+
+    const previousUserTurns = history.filter((message) => message.role === "user");
+    const previousImageMessage = [...previousUserTurns].reverse().find((message) => message.attachments?.length || message.attachment?.name);
+    const previousActionMessage = [...previousUserTurns].reverse().find((message) =>
+      /\b(create|generate|make|render|animate|edit|change|replace|remove|restyle|inpaint|outpaint|transform|upscale)\b/i.test(message.content || "")
+    );
+    const previousActionText = (previousActionMessage?.content || "").replace(/\[Attached Image:[^\]]+\]/g, "").trim();
+    const shortFollowUp = /^(?:(?:use|with)\s+)?(?:krea(?:\s*2)?|qwen(?:\s+image)?|ltx(?:\s*2?\.?3)?|minimax|mini\s*max)(?:\s+(?:text\s+to\s+image|image\s+to\s+image|text\s+to\s+video|image\s+to\s+video|t2i|i2i|t2v|i2v))?[.!?\s]*$|^(?:now|do it|go ahead|continue|again|run it)[.!?\s]*$/i.test(text);
+    const regenerateFollowUp = /\b(?:re[\s-]*g(?:e)?nerate|regenerate|again|same image)\b/i.test(text);
+    const continuePreviousTask = shortFollowUp || regenerateFollowUp;
+    const currentLooksLikeEdit = /\b(edit|change|chage|replace|remove|restyle|inpaint|outpaint|move|put|place|position|sit|stand|turn|t[\s-]?shirt|shirt|clothing|hair|background|colour|color|face)\b/i.test(text);
+    const priorLooksLikeEdit = /\b(edit|change|chage|replace|remove|restyle|inpaint|outpaint|t[\s-]?shirt|shirt|clothing|hair|background|colour|color|face)\b/i.test(previousActionText);
+    const planningText = continuePreviousTask && previousActionText ? `${previousActionText}\n${text}` : text;
 
     let userDisplay = text;
     let userPrompt = text;
-    let attachmentObj = null;
-    if (currentAttachment) {
-      attachmentObj = {
-        name: currentAttachment.name,
-        subfolder: currentAttachment.subfolder || "",
-        type: currentAttachment.type || "input",
-      };
-      const attachTag = `[Attached Image: ${currentAttachment.name}]`;
-      userDisplay = userDisplay ? `${userDisplay}\n📷 ${currentAttachment.name}` : `📷 ${currentAttachment.name}`;
-      userPrompt = userPrompt ? `${userPrompt}\n${attachTag}` : attachTag;
-      currentAttachment = null;
-      previewBox.style.display = "none";
+    let attachmentObjs = currentAttachments.map(({ name, subfolder, type }) => ({ name, subfolder, type }));
+    if (attachmentObjs.length) {
+      const labels = attachmentObjs.map((item, index) => `[Attached Image ${index + 1}: ${item.name}]`);
+      const names = attachmentObjs.map((item, index) => `${index + 1}. ${item.name}`).join("\n");
+      userDisplay = userDisplay ? `${userDisplay}\n📷 ${names}` : `📷 ${names}`;
+      userPrompt = `${userPrompt}${userPrompt ? "\n" : ""}${labels.join("\n")}`;
+      currentAttachments = [];
+      renderAttachmentPreview();
+    }
+    let routingAttachments = attachmentObjs.length ? attachmentObjs : [];
+    if (!routingAttachments.length && previousImageMessage && !(currentLooksLikeEdit && latestGeneratedImage) && (currentLooksLikeEdit || (continuePreviousTask && priorLooksLikeEdit))) {
+      routingAttachments = previousImageMessage.attachments || (previousImageMessage.attachment ? [previousImageMessage.attachment] : []);
+    }
+    if (!routingAttachments.length && currentLooksLikeEdit && latestGeneratedImage) {
+      try { routingAttachments = [await copyGeneratedImageToInput(latestGeneratedImage)]; }
+      catch (reuseError) { console.warn("Could not reuse the latest generated image", reuseError); }
     }
 
     add("ca-user", userDisplay);
-    history.push({ role: "user", content: userPrompt, attachment: attachmentObj });
-
-    // Immediate Direct Intent Detection: Resolution Change (with typo tolerance)
-    const aspectTokenMatch = text.match(/(16[:/x]9|9[:/x]16|1[:/x]1|4[:/x]3|3[:/x]4|21[:/x]9|landscape|portrait|square|widescreen|ultrawide)/i);
-    const hasResIntent = /change|chnage|set|switch|make|adjust|update|res|resol|aspect|ratio|format/i.test(text);
-    if (aspectTokenMatch && (hasResIntent || /16[:/x]9|9[:/x]16/i.test(text))) {
-      const targetAspect = aspectTokenMatch[1].replace(/[/x]/g, ":");
-      const resResult = setCanvasResolution(null, null, targetAspect);
-      if (resResult.success) {
-        const badge = document.createElement("div");
-        badge.className = "ca-action-badge";
-        badge.innerHTML = `📐 Action: Resolution updated on canvas (${resResult.details})`;
-        log.appendChild(badge);
-      }
-    }
+    history.push({ role: "user", content: userPrompt, attachments: attachmentObjs });
 
     const out = add("ca-bot", "…");
     let acc = "";
@@ -992,17 +1202,62 @@ function buildPanel(root, settingsBtn) {
     const workflowContext = getWorkflowContext();
 
     try {
+      let orchestrationPlan = { status: "chat", intent: "chat" };
+      try {
+        const planRes = await fetch("/superagent/plan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            request: planningText,
+            has_image: routingAttachments.length > 0,
+            active_workflow: wfSel.value || null,
+          }),
+        });
+        const planData = await planRes.json();
+        if (!planRes.ok) throw new Error(planData.error || "Planner request failed");
+        orchestrationPlan = planData.plan;
+      } catch (planError) {
+        orchestrationPlan = { status: "planner_error", message: planError.message };
+      }
+
+      if (orchestrationPlan.max_images && routingAttachments.length > orchestrationPlan.max_images) {
+        out.textContent = `${orchestrationPlan.skill_name} accepts up to ${orchestrationPlan.max_images} images in one request; ${routingAttachments.length} are attached. Remove the extra images and resend. No workflow was loaded or queued.`;
+        currentAttachments = routingAttachments.map((attachment) => ({
+          ...attachment,
+          url: attachment.url || `/view?filename=${encodeURIComponent(attachment.name)}&subfolder=${encodeURIComponent(attachment.subfolder || "")}&type=${encodeURIComponent(attachment.type || "input")}`,
+        }));
+        renderAttachmentPreview();
+        busy = false; sendBtn.disabled = false; box.focus();
+        return;
+      }
+
+      if (orchestrationPlan.status === "canvas_settings") {
+        const target = /full\s*hd|1080p/i.test(text) ? "full hd" : /\bhd\b|720p/i.test(text) ? "hd" :
+          (text.match(/16[:/x]9|9[:/x]16|1[:/x]1|4[:/x]3|3[:/x]4|21[:/x]9|landscape|portrait|square|widescreen|ultrawide/i) || [])[0];
+        const dimensions = text.match(/(\d{3,4})\s*[x×]\s*(\d{3,4})/i);
+        const updated = setCanvasResolution(dimensions?.[1] || null, dimensions?.[2] || null, target);
+        out.textContent = updated.success
+          ? `📐 Active workflow resolution updated (${updated.details}). The workflow was not loaded or run.`
+          : `Could not update the active workflow: ${updated.error}. No workflow was loaded or run.`;
+        busy = false; sendBtn.disabled = false; box.focus();
+        return;
+      }
+
       const res = await fetch("/superagent/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: sel.value,
-          messages: history.map((m) => ({
+          messages: history.map((m, index) => ({
             role: m.role,
             content: m.content,
-            attachment: m.attachment || null,
+            // Send pixels only for this request's explicit or intentionally
+            // reused image context. Old uploads stay in text history, not as
+            // accidental visual input to unrelated new generations.
+            attachments: index === history.length - 1 ? routingAttachments : [],
           })),
           workflow_context: workflowContext,
+          orchestration_plan: orchestrationPlan,
         }),
       });
       const reader = res.body.getReader();
@@ -1038,12 +1293,40 @@ function buildPanel(root, settingsBtn) {
         history.push({ role: "assistant", content: acc });
 
         // Parse Action Tags from assistant response - flexible pattern matching
+        const editActionMatch = acc.match(/<SUPERAGENT_ACTION>([\s\S]*?)<\/SUPERAGENT_ACTION>/i);
+        let orchestratorAction = null;
+        if (editActionMatch) {
+          try {
+            const candidate = JSON.parse(editActionMatch[1]);
+            if (["run", "edit_image", "generate_image", "generate_video"].includes(candidate?.type) && typeof candidate.prompt === "string" && candidate.prompt.trim()) orchestratorAction = candidate;
+          } catch (err) {
+            console.warn("Invalid orchestrator action payload", err);
+          }
+        }
+        // Accept the legacy action emitted by older prompts/models, but route it
+        // through the same validated plan and preflight as current actions.
+        const legacyEditMatch = acc.match(/\[ACTION:EDIT_IMAGE\s+prompt=["']([\s\S]*?)["']\s*\]/i);
+        if (!orchestratorAction && legacyEditMatch && legacyEditMatch[1].trim()) {
+          orchestratorAction = { type: "edit_image", prompt: legacyEditMatch[1].trim() };
+        }
         const resMatch = acc.match(/\[ACTION:SET_RESOLUTION(?:\s+width=["']?(\d+)["']?)?(?:\s+height=["']?(\d+)["']?)?(?:\s+aspect_ratio=["']?([^"'\s\]]+)["']?)?\]/i);
         const samplerMatch = acc.match(/\[ACTION:SET_SAMPLER(?:\s+steps=["']?(\d+)["']?)?(?:\s+cfg=["']?([\d\.]+)["']?)?(?:\s+denoise=["']?([\d\.]+)["']?)?(?:\s+sampler=["']?([^"'\s\]]+)["']?)?(?:\s+scheduler=["']?([^"'\s\]]+)["']?)?\]/i);
         const loadMatch = acc.match(/\[ACTION:(?:LOAD_WORKFLOW|SET_WORKFLOW|USE_WORKFLOW)\s+(?:name|template|workflow)=["']?([^"'\s\]]+)["']?(?:\s+prompt=["'](.*?)["'])?\]/i);
         const genMatch = acc.match(/\[ACTION:GENERATE_IMAGE\s+prompt=["'](.*?)["']\]/i);
         const setMatch = acc.match(/\[ACTION:SET_PROMPT(?:\s+positive=["'](.*?)["'])?(?:\s+negative=["'](.*?)["'])?\]/i);
         const runMatch = acc.match(/\[ACTION:RUN_WORKFLOW\]/i);
+        const safeFallbackIntent = ["text_to_image", "image_edit", "text_to_video", "image_to_video", "image_with_references"].includes(orchestrationPlan.intent);
+        const modelRefused = /cannot provide|can't provide|cannot help|can't help|not appropriate or ethical|safety policy/i.test(acc);
+        if (!orchestratorAction && !genMatch && !runMatch && orchestrationPlan.status === "ready" && safeFallbackIntent && !modelRefused) {
+          // The user explicitly requested generation (the planner only returns
+          // these intents for action verbs). If the LLM returns prose/caption
+          // instead of a tag, use the request as the prompt after preflight.
+          orchestratorAction = {
+            type: orchestrationPlan.intent === "image_edit" ? "edit_image" : "run",
+            prompt: planningText,
+          };
+        }
+        const generationRequested = !!(orchestratorAction || genMatch || runMatch);
 
         // Parse Option Chips from assistant response
         const optMatch = acc.match(/\[OPTIONS:\s*(.*?)\]/i);
@@ -1057,6 +1340,9 @@ function buildPanel(root, settingsBtn) {
         }
 
         let cleanText = acc
+          .replace(/<SUPERAGENT_ACTION>[\s\S]*?<\/SUPERAGENT_ACTION>/gi, "")
+          .replace(/\[ACTION:EDIT_IMAGE\s+prompt=["'][\s\S]*?["']\s*\]/gi, "")
+          .replace(/^\s*\[INFO:GENERATION\][^\n]*(?:\n|$)/gim, "")
           .replace(/\[ACTION:SET_RESOLUTION(?:\s+width=["']?\d+["']?)?(?:\s+height=["']?\d+["']?)?(?:\s+aspect_ratio=["']?[^"'\s\]]+["']?)?\]/gi, "")
           .replace(/\[ACTION:SET_SAMPLER(?:\s+steps=["']?\d+["']?)?(?:\s+cfg=["']?[\d\.]+["']?)?(?:\s+denoise=["']?[\d\.]+["']?)?(?:\s+sampler=["']?[^"'\s\]]+["']?)?(?:\s+scheduler=["']?[^"'\s\]]+["']?)?\]/gi, "")
           .replace(/\[ACTION:(?:LOAD_WORKFLOW|SET_WORKFLOW|USE_WORKFLOW)\s+(?:name|template|workflow)=["']?.*?["']?(?:\s+prompt=["'].*?["'])?\]/gi, "")
@@ -1065,6 +1351,13 @@ function buildPanel(root, settingsBtn) {
           .replace(/\[ACTION:RUN_WORKFLOW\]/gi, "")
           .replace(/\[OPTIONS:\s*.*?\]/gi, "")
           .trim();
+
+        const unsupportedCompletionClaim = /\b(generation complete|image rendering complete|rendered successfully|now displayed below|processing your request to edit)\b/i.test(acc);
+        if (unsupportedCompletionClaim) {
+          cleanText = generationRequested
+            ? "The model's progress claim is unverified. ComfyUI reports execution status only after a confirmed run."
+            : "The model reported a generation status, but no ComfyUI job was started. No edit has been confirmed.";
+        }
 
         out.innerHTML = "";
         if (cleanText) {
@@ -1090,7 +1383,7 @@ function buildPanel(root, settingsBtn) {
         }
 
         // 1. Apply Resolution Change if requested
-        if (resMatch) {
+        if (resMatch && !(orchestrationPlan.status === "ready" && generationRequested)) {
           const reqW = resMatch[1];
           const reqH = resMatch[2];
           const reqAspect = (resMatch[3] || "").toLowerCase();
@@ -1117,7 +1410,240 @@ function buildPanel(root, settingsBtn) {
           out.prepend(badge);
         }
 
-        if (loadMatch) {
+        if (["unavailable", "incompatible", "needs_choice", "needs_input", "planner_error"].includes(orchestrationPlan.status)) {
+          const routeEl = document.createElement("div");
+          routeEl.className = "ca-err";
+          routeEl.textContent = orchestrationPlan.message || "The orchestrator could not select a workflow.";
+          out.appendChild(routeEl);
+          if (orchestrationPlan.status === "needs_choice" && orchestrationPlan.choices?.length) {
+            const choices = document.createElement("div");
+            choices.className = "ca-options-box";
+            for (const choice of orchestrationPlan.choices) {
+              const button = document.createElement("button");
+              button.className = "ca-option-chip";
+              button.textContent = choice.name;
+              button.onclick = () => { box.value = `Use ${choice.name} to ${text}`; send(); };
+              choices.appendChild(button);
+            }
+            out.appendChild(choices);
+          } else if (orchestrationPlan.status === "unavailable" && orchestrationPlan.candidates?.length) {
+            const alternatives = orchestrationPlan.candidates.filter((candidate) => candidate.available && candidate.task === orchestrationPlan.intent).slice(0, 3);
+            if (alternatives.length) {
+              const label = document.createElement("div");
+              label.className = "ca-img-meta";
+              label.textContent = "Available alternatives:";
+              out.appendChild(label);
+              const choices = document.createElement("div");
+              choices.className = "ca-options-box";
+              for (const candidate of alternatives) {
+                const button = document.createElement("button");
+                button.className = "ca-option-chip";
+                button.textContent = candidate.name;
+                button.onclick = () => { box.value = `Use ${candidate.name} for this request: ${text}`; send(); };
+                choices.appendChild(button);
+              }
+              out.appendChild(choices);
+            }
+          }
+        } else if (orchestrationPlan.status === "ready" && generationRequested) {
+          const prompt = orchestratorAction?.prompt || genMatch?.[1] || "";
+          const action = {
+            prompt,
+            negative_prompt: orchestratorAction?.negative_prompt || "",
+          };
+          const routeBadge = document.createElement("div");
+          routeBadge.className = "ca-action-badge";
+          const selectedModel = orchestrationPlan.models?.[0];
+          routeBadge.textContent = `🧭 Routed to ${orchestrationPlan.skill_name}${selectedModel ? ` · ${selectedModel}` : ""}`;
+          out.prepend(routeBadge);
+          if (orchestrationPlan.route_reason) {
+            const rationale = document.createElement("div");
+            rationale.className = "ca-img-meta";
+            rationale.textContent = orchestrationPlan.route_reason;
+            out.appendChild(rationale);
+          }
+          const otherCandidates = (orchestrationPlan.candidates || []).filter((candidate) => !candidate.selected).slice(0, 3);
+          if (otherCandidates.length) {
+            const alternatives = document.createElement("div");
+            alternatives.className = "ca-img-meta";
+            alternatives.textContent = `Other registered skills: ${otherCandidates.map((candidate) => `${candidate.name}${candidate.available ? "" : " (workflow unavailable)"}`).join(" · ")}`;
+            out.appendChild(alternatives);
+          }
+          if (!prompt.trim()) {
+            const statusEl = document.createElement("div");
+            out.appendChild(statusEl);
+            statusEl.innerHTML = `<div class="ca-err">The planner selected ${orchestrationPlan.skill_name}, but the model did not return a usable generation prompt. No workflow was queued.</div>`;
+          } else {
+            const preflightEl = document.createElement("div");
+            preflightEl.className = "ca-status-bar";
+            preflightEl.textContent = "Checking available GPU memory, installed models, and workflow settings…";
+            out.appendChild(preflightEl);
+            log.scrollTop = log.scrollHeight;
+            try {
+              const preflightRes = await fetch("/superagent/preflight", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ plan: orchestrationPlan, request: text }),
+              });
+              const preflightData = await preflightRes.json();
+              if (!preflightRes.ok) throw new Error(preflightData.error || "Preflight failed");
+              const report = preflightData.preflight;
+              preflightEl.className = report.can_proceed ? "ca-options-box" : "ca-err";
+              preflightEl.replaceChildren();
+              const summary = document.createElement("div");
+              const machine = report.machine || {};
+              const gpuSummary = machine.cuda_available
+                ? `${machine.gpu || "CUDA GPU"}${machine.vram_free_gb == null ? "" : ` · ${machine.vram_free_gb} GB VRAM free of ${machine.vram_total_gb} GB`}`
+                : "CUDA GPU not detected";
+              summary.textContent = `Preflight · ${report.skill_name}: ${report.mode} Recommended size: ${report.resolution.width}×${report.resolution.height}. ${gpuSummary}.`;
+              preflightEl.appendChild(summary);
+              if (report.warnings?.length) {
+                const warning = document.createElement("div");
+                warning.textContent = report.warnings.join(" ");
+                warning.style.color = "#ffb454";
+                preflightEl.appendChild(warning);
+              }
+              if (machine.ram_total_gb != null) {
+                const ram = document.createElement("div");
+                ram.textContent = `System RAM: ${machine.ram_total_gb} GB. Model files indexed: ${Object.values(report.model_inventory || {}).reduce((a, b) => a + b, 0)}.`;
+                preflightEl.appendChild(ram);
+              }
+              let identitySelect = null;
+              if (report.selected_lora) orchestrationPlan.selected_lora = report.selected_lora;
+              if (orchestrationPlan.lora_required && !report.selected_lora) {
+                const label = document.createElement("label");
+                label.textContent = "Identity LoRA (choose the installed identity matching this person): ";
+                identitySelect = document.createElement("select");
+                identitySelect.style.cssText = "background:#181818;color:#eee;border:1px solid #555;border-radius:4px;padding:5px;max-width:100%;";
+                const placeholder = document.createElement("option");
+                placeholder.value = "";
+                placeholder.textContent = "Select Krea identity LoRA";
+                identitySelect.appendChild(placeholder);
+                for (const name of report.identity_loras || []) {
+                  const option = document.createElement("option");
+                  option.value = name;
+                  option.textContent = name;
+                  identitySelect.appendChild(option);
+                }
+                label.appendChild(identitySelect);
+                preflightEl.appendChild(label);
+                const note = document.createElement("div");
+                note.textContent = "These LoRAs encode specific identities. Choose only a matching identity; there is no generic identity LoRA.";
+                note.style.color = "#aaa";
+                preflightEl.appendChild(note);
+              } else if (report.selected_lora) {
+                const note = document.createElement("div");
+                note.textContent = `Krea Identity Edit LoRA: ${report.selected_lora}`;
+                note.style.color = "#aaa";
+                preflightEl.appendChild(note);
+              }
+              if (report.can_proceed) {
+                const proceed = document.createElement("button");
+                proceed.className = "ca-option-chip";
+                proceed.textContent = "Load workflow and queue";
+                if (identitySelect) {
+                  proceed.disabled = true;
+                  proceed.textContent = report.identity_loras?.length ? "Choose identity LoRA first" : "Identity LoRA unavailable";
+                  identitySelect.addEventListener("change", () => {
+                    proceed.disabled = !identitySelect.value;
+                    proceed.textContent = identitySelect.value ? "Load workflow and queue" : "Choose identity LoRA first";
+                  });
+                }
+                proceed.onclick = async () => {
+                  if (identitySelect) {
+                    if (!identitySelect.value) return;
+                    orchestrationPlan.selected_lora = identitySelect.value;
+                  }
+                  proceed.disabled = true;
+                  proceed.textContent = "Preparing workflow…";
+                  const statusEl = document.createElement("div");
+                  preflightEl.appendChild(statusEl);
+                  const activeNodes = app.graph?._nodes || [];
+                  const activeWorkflowMatches = wfSel.value === orchestrationPlan.workflow_id;
+                  const activeEditCompatible = orchestrationPlan.intent === "image_edit" &&
+                    activeNodes.some((node) => node.type === "LoadImage") &&
+                    activeNodes.some((node) => node.type === "KSampler") &&
+                    activeNodes.some((node) => node.type === "LoraLoaderModelOnly") &&
+                    activeNodes.some((node) => node.type === "ImageScale") &&
+                    activeNodes.some((node) => node.type === "UNETLoader" && String(node.widgets?.[0]?.value || "").toLowerCase().includes("krea2"));
+                  const useActiveGraph = activeWorkflowMatches || activeEditCompatible;
+                  statusEl.innerHTML = `<div class="ca-status-bar"><span class="ca-spinner">⚙</span> ${useActiveGraph ? "Using the compatible active edit workflow…" : `Loading ${orchestrationPlan.workflow_name}...`}</div>`;
+                  const loaded = useActiveGraph || await loadWorkflowByName(orchestrationPlan.workflow_id);
+                  if (!loaded) {
+                    statusEl.innerHTML = `<div class="ca-err">Could not load ${orchestrationPlan.workflow_name}. Nothing was queued.</div>`;
+                    proceed.disabled = false;
+                    proceed.textContent = "Retry";
+                    return;
+                  }
+                  wfSel.value = orchestrationPlan.workflow_id;
+                  if (report.resolution?.apply) {
+                    const resized = setCanvasResolution(report.resolution.width, report.resolution.height);
+                    if (!resized.success) {
+                      statusEl.textContent = `The selected workflow has no editable resolution input, so ${report.resolution.width}×${report.resolution.height} could not be applied. Nothing was queued.`;
+                      return;
+                    }
+                  }
+                  const inputs = applyOrchestrationInputs(orchestrationPlan, action, routingAttachments);
+                  if (!inputs.ok) {
+                    statusEl.textContent = `${inputs.error} The workflow was loaded but not queued.`;
+                    return;
+                  }
+                  proceed.remove();
+                  await executeGeneration(null, statusEl);
+                };
+                preflightEl.appendChild(proceed);
+              } else {
+                const blocked = document.createElement("div");
+                blocked.textContent = "Queue blocked because required model files are missing. Install them or choose another workflow.";
+                preflightEl.appendChild(blocked);
+              }
+            } catch (preflightError) {
+              preflightEl.className = "ca-err";
+              preflightEl.textContent = `Preflight could not verify this run: ${preflightError.message}. Nothing was queued.`;
+            }
+          }
+        } else if (orchestrationPlan.status === "active_canvas") {
+          const statusEl = document.createElement("div");
+          statusEl.innerHTML = `<div class="ca-status-bar"><span class="ca-spinner">⚙</span> Running the active canvas workflow by request...</div>`;
+          out.appendChild(statusEl);
+          await executeGeneration(null, statusEl);
+        } else if (["chat", "advice"].includes(orchestrationPlan.status) && generationRequested && !(orchestrationPlan.status === "advice" && genMatch && /(?:need|give|write|get|show|create|extract)\s+(?:a\s+)?prompt\b|describe\s+(?:this|the)?\s*image|what\s+is\s+the\s+prompt/i.test(text))) {
+          const routeEl = document.createElement("div");
+          routeEl.className = "ca-err";
+          routeEl.textContent = "No workflow was selected for this generation. Name a model/workflow or choose one from the workflow menu; the active canvas was not queued.";
+          out.appendChild(routeEl);
+        } else if (orchestrationPlan.status === "ready" && !generationRequested && ["text_to_image", "image_edit", "text_to_video", "image_to_video", "image_with_references"].includes(orchestrationPlan.intent)) {
+          const routeEl = document.createElement("div");
+          routeEl.className = "ca-err";
+          routeEl.textContent = `The ${orchestrationPlan.skill_name} workflow is available, but the model did not return a runnable action. Nothing was queued.`;
+          out.appendChild(routeEl);
+        } else if (orchestratorAction?.type === "edit_image") {
+          const statusEl = document.createElement("div");
+          statusEl.textContent = "This edit action did not receive a validated workflow plan, so nothing was queued.";
+          out.appendChild(statusEl);
+        } else if (loadMatch) {
+          const statusEl = document.createElement("div");
+          out.appendChild(statusEl);
+          log.scrollTop = log.scrollHeight;
+          if (!routingAttachments[0]?.name) {
+            statusEl.innerHTML = `<div class="ca-err">This edit action needs an image attached to the current message. Upload the source image and try again.</div>`;
+          } else {
+            statusEl.innerHTML = `<div class="ca-status-bar"><span class="ca-spinner">⚙</span> Preparing the image edit workflow...</div>`;
+            const loaded = await loadWorkflowByName("template_krea2_i2i");
+            if (!loaded) {
+              statusEl.innerHTML = `<div class="ca-err">Could not load the bundled image-to-image workflow.</div>`;
+            } else if (!setWorkflowImage(routingAttachments[0].name)) {
+              statusEl.innerHTML = `<div class="ca-err">The image-to-image workflow has no usable LoadImage input.</div>`;
+            } else {
+              const { positiveNode } = findPromptNodes();
+              if (!setNodePromptText(positiveNode, editAction.prompt)) {
+                statusEl.innerHTML = `<div class="ca-err">Could not find the positive prompt input in the image-to-image workflow.</div>`;
+              } else {
+                await executeGeneration(null, statusEl);
+              }
+            }
+          }
+        } else if (loadMatch) {
           const wfName = loadMatch[1];
           const promptToRun = loadMatch[2];
           const badge = document.createElement("div");
@@ -1139,7 +1665,7 @@ function buildPanel(root, settingsBtn) {
           } else {
             statusEl.innerHTML = `<div class="ca-err">❌ Could not find or load workflow "${wfName}".</div>`;
           }
-        } else if (genMatch) {
+        } else if (genMatch && orchestrationPlan.status !== "ready") {
           const promptToRun = genMatch[1];
           // Check if user's prompt was asking for a prompt or description (NOT asking to generate)
           const isPromptOnlyRequest = /(?:need|give|write|get|show|create|extract)\s+(?:a\s+)?prompt\b/i.test(text) ||
@@ -1426,3 +1952,4 @@ app.registerExtension({
     createUI();
   },
 });
+
