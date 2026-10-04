@@ -1,6 +1,6 @@
 {
-  "last_node_id": 10,
-  "last_link_id": 12,
+  "last_node_id": 12,
+  "last_link_id": 14,
   "nodes": [
     {
       "id": 1,
@@ -229,7 +229,7 @@
         {
           "name": "pixels",
           "type": "IMAGE",
-          "link": 8
+          "link": 14
         },
         {
           "name": "vae",
@@ -252,6 +252,84 @@
       "widgets_values": []
     },
     {
+      "id": 12,
+      "type": "ImageScale",
+      "pos": [
+        780,
+        610
+      ],
+      "size": [
+        315,
+        170
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 8
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            14
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "ImageScale"
+      },
+      "widgets_values": [
+        "lanczos",
+        1024,
+        1024,
+        "center"
+      ]
+    },
+    {
+      "id": 11,
+      "type": "LoraLoaderModelOnly",
+      "pos": [
+        580,
+        -40
+      ],
+      "size": [
+        315,
+        98
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model",
+          "type": "MODEL",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "MODEL",
+          "type": "MODEL",
+          "links": [
+            13
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoraLoaderModelOnly"
+      },
+      "widgets_values": [
+        "",
+        1.0
+      ]
+    },
+    {
       "id": 8,
       "type": "KSampler",
       "pos": [
@@ -269,7 +347,7 @@
         {
           "name": "model",
           "type": "MODEL",
-          "link": 1
+          "link": 13
         },
         {
           "name": "positive",
@@ -306,7 +384,7 @@
         1.0,
         "euler",
         "simple",
-        0.65
+        0.2
       ]
     },
     {
@@ -384,6 +462,14 @@
       1,
       1,
       0,
+      11,
+      0,
+      "MODEL"
+    ],
+    [
+      13,
+      11,
+      0,
       8,
       0,
       "MODEL"
@@ -440,6 +526,14 @@
       8,
       6,
       0,
+      12,
+      0,
+      "IMAGE"
+    ],
+    [
+      14,
+      12,
+      0,
       7,
       0,
       "IMAGE"
@@ -474,3 +568,4 @@
   "extra": {},
   "version": 0.4
 }
+
