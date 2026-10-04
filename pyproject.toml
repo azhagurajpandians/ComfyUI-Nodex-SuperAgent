@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-nodex-superagent"
 description = "SuperAgent inside ComfyUI: multi-provider AI assistant with live canvas workflow automation."
-version = "1.0.1"
+version = "1.0.2"
 license = { text = "MIT" }
 dependencies = []
 
@@ -11,4 +11,4 @@ Repository = "https://github.com/azhagurajpandians/ComfyUI-Nodex-SuperAgent"
 [tool.comfy]
 PublisherId = "azhagurajpandians"
 DisplayName = "ComfyUI-Nodex-SuperAgent"
-Icon = ""
+Icon = "https://raw.githubusercontent.com/azhagurajpandians/ComfyUI-Nodex-SuperAgent/main/assets/nodex-superagent-icon.png"
