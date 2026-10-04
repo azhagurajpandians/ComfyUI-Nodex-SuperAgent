@@ -1609,9 +1609,37 @@ function buildPanel(root, settingsBtn) {
           await executeGeneration(null, statusEl);
         } else if (["chat", "advice"].includes(orchestrationPlan.status) && generationRequested && !(orchestrationPlan.status === "advice" && genMatch && /(?:need|give|write|get|show|create|extract)\s+(?:a\s+)?prompt\b|describe\s+(?:this|the)?\s*image|what\s+is\s+the\s+prompt/i.test(text))) {
           const routeEl = document.createElement("div");
-          routeEl.className = "ca-err";
-          routeEl.textContent = "No workflow was selected for this generation. Name a model/workflow or choose one from the workflow menu; the active canvas was not queued.";
+          const asksForVideo = /\b(video|clip|animation|animate|t2v|i2v)\b/i.test(planningText);
+          const asksForEdit = routingAttachments.length > 0 || /\b(edit|change|replace|remove|restyle|inpaint|outpaint|transform|sit|stand|place|move|put)\b/i.test(planningText);
+          const tasks = asksForVideo
+            ? (routingAttachments.length ? ["image_to_video", "text_to_video"] : ["text_to_video"])
+            : asksForEdit ? ["image_edit", "image_with_references"] : ["text_to_image"];
+          const suggestions = availableSkills.filter((skill) => skill.available && tasks.includes(skill.task)).slice(0, 4);
+          routeEl.className = suggestions.length ? "ca-bot" : "ca-img-meta";
+          routeEl.textContent = suggestions.length
+            ? "I can help with that. Which workflow would you like me to use?"
+            : "I can answer questions and help plan the result. To generate it, choose a workflow from the menu or tell me which model to use.";
           out.appendChild(routeEl);
+          if (suggestions.length) {
+            const choices = document.createElement("div");
+            choices.className = "ca-options-box";
+            for (const skill of suggestions) {
+              const button = document.createElement("button");
+              button.className = "ca-option-chip";
+              button.textContent = skill.name;
+              button.onclick = () => {
+                box.value = `Use ${skill.name} for this request: ${planningText}`;
+                send();
+              };
+              choices.appendChild(button);
+            }
+            const activeButton = document.createElement("button");
+            activeButton.className = "ca-option-chip";
+            activeButton.textContent = "Use active workflow";
+            activeButton.onclick = () => { box.value = `Use the active workflow for this request: ${planningText}`; send(); };
+            choices.appendChild(activeButton);
+            out.appendChild(choices);
+          }
         } else if (orchestrationPlan.status === "ready" && !generationRequested && ["text_to_image", "image_edit", "text_to_video", "image_to_video", "image_with_references"].includes(orchestrationPlan.intent)) {
           const routeEl = document.createElement("div");
           routeEl.className = "ca-err";
