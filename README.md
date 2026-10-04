@@ -1,5 +1,9 @@
 # ComfyUI-Nodex-SuperAgent
 
+<p align="center">
+  <img src="https://raw.githubusercontent.com/azhagurajpandians/ComfyUI-Nodex-SuperAgent/main/assets/nodex-superagent-icon.png" alt="Nodex SuperAgent icon" width="160" />
+</p>
+
 Nodex SuperAgent: an AI assistant inside ComfyUI, supporting local models (Ollama) and cloud APIs (NVIDIA NIM, Google Gemini, OpenAI). Floating chat window (or dock it to either side) with streaming responses.
 
 **Status:** Workflow orchestrator prototype. It plans a single generation run, routes to a declared skill, loads the selected ComfyUI visual graph onto the canvas, fills mapped inputs, queues it, and returns image/video outputs. Multi-step production pipelines remain future work.
